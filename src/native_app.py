@@ -57,6 +57,7 @@ import argparse
 import math
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -72,16 +73,20 @@ def open_in_dolphin(target: str | Path | None = None) -> None:
     If given a file, Dolphin opens with --select to highlight it.
     If given a directory, Dolphin opens that directory.
     """
+    dolphin_bin = shutil.which("dolphin")
+    if not dolphin_bin and os.path.isfile("/run/current-system/sw/bin/dolphin"):
+        dolphin_bin = "/run/current-system/sw/bin/dolphin"
+    dolphin_cmd = dolphin_bin or "dolphin"
     try:
         p = Path(target).resolve() if target else Path.home()
         if p.is_file():
-            subprocess.Popen(["dolphin", "--select", str(p)])
+            subprocess.Popen([dolphin_cmd, "--select", str(p)])
         elif p.is_dir():
-            subprocess.Popen(["dolphin", str(p)])
+            subprocess.Popen([dolphin_cmd, str(p)])
         elif p.parent.is_dir():
-            subprocess.Popen(["dolphin", str(p.parent)])
+            subprocess.Popen([dolphin_cmd, str(p.parent)])
         else:
-            subprocess.Popen(["dolphin", str(Path.home())])
+            subprocess.Popen([dolphin_cmd, str(Path.home())])
     except Exception:
         try:
             fallback = str(p if p.is_dir() else p.parent)
@@ -548,9 +553,12 @@ def build_document_tree(
             item.confidence = float(entry.get("confidence", 0.0) or 0.0)
             item.status = str(entry.get("status") or "")
         elif pending:
-            score, label = _score_subject(name, taxonomy)
-            item.subject = label
-            item.confidence = heuristic_confidence(score)
+            rating = rate_document(name, taxonomy)
+            item.subject = rating.subject
+            item.confidence = rating.confidence
+            item.entropy = rating.entropy
+            item.status = rating.status
+            item.ranking = list(rating.ranking)
         else:
             item.subject = subject
             item.confidence = 0.94
@@ -930,14 +938,14 @@ class SettingsDialog(ctk.CTkToplevel):
         btn_box.grid(row=row + 1, column=1, sticky="e", padx=(0, 20), pady=(0, 2))
 
         ctk.CTkButton(
-            btn_box, text="Open Dolphin", width=125, height=44, corner_radius=self._theme.RADIUS_SMALL,
+            btn_box, text="📂 Open Dolphin", width=130, height=44, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ACCENT, hover_color=self._theme.ACCENT_DEEP, text_color="#ffffff",
             font=self._theme.ui_font(self._theme.FONT_BASE, "bold"),
             command=lambda: open_in_dolphin(entry.get().strip()),
         ).pack(side="left", padx=(0, 6))
 
         ctk.CTkButton(
-            btn_box, text="Pick...", width=80, height=44, corner_radius=self._theme.RADIUS_SMALL,
+            btn_box, text="Browse...", width=88, height=44, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ELEVATED, hover_color=self._theme.HOVER, border_width=1,
             border_color=self._theme.BORDER, text_color=self._theme.TEXT_MUTED,
             font=self._theme.ui_font(self._theme.FONT_BASE), command=lambda: self._browse(entry),
@@ -971,6 +979,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _browse(self, entry: ctk.CTkEntry) -> None:
         initial = entry.get().strip() or str(Path.home())
+        open_in_dolphin(initial)
         chosen = filedialog.askdirectory(initialdir=initial, parent=self)
         if chosen:
             entry.delete(0, "end")
@@ -1728,7 +1737,8 @@ class SortwiseApp(ctk.CTk):
         actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
         self._settings_button = self._action_button(actions, "⚙ Setup & Paths", self.open_settings, accent=False)
         self._dolphin_button = self._action_button(actions, "📂 Open in Dolphin", self.open_active_in_dolphin, accent=False)
-        self._pick_file_button = self._action_button(actions, "Choose File", self.pick_custom_file, accent=False)
+        self._pick_folder_button = self._action_button(actions, "📁 Choose Folder", self.pick_custom_folder, accent=False)
+        self._pick_file_button = self._action_button(actions, "📄 Choose File", self.pick_custom_file, accent=False)
         self._scan_disk_button = self._action_button(actions, "🔍 Fast Scan", self.start_disk_scan, accent=True)
         self._auto_button = self._action_button(actions, "⚡ Auto-Route", self.auto_route_confident, accent=False)
         
@@ -2566,11 +2576,7 @@ class SortwiseApp(ctk.CTk):
 
         config = self._config_store.load()
         if not roots:
-            candidates = [config.watch_folder]
-            for p in (Path.home() / "Downloads", Path.home() / "Documents", Path.home() / "Desktop"):
-                if p.is_dir() and str(p) not in candidates:
-                    candidates.append(str(p))
-            roots = candidates
+            roots = [config.watch_folder]
 
         self._scan_running = True
         self._scan_cancel = threading.Event()
@@ -2601,7 +2607,7 @@ class SortwiseApp(ctk.CTk):
             return scanner.scan(
                 roots,
                 recursive=recursive,
-                max_depth=4,
+                max_depth=3,
                 on_progress=on_progress,
                 cancel=self._scan_cancel,
             )
@@ -2809,10 +2815,12 @@ class SortwiseApp(ctk.CTk):
 
     def pick_custom_folder(self) -> None:
         """Allow user to select ANY folder from disk to scan and route."""
+        initial = str(Path.home())
+        open_in_dolphin(initial)
         folder = filedialog.askdirectory(
             parent=self,
             title="Choose Folder to Scan & Route",
-            initialdir=str(Path.home()),
+            initialdir=initial,
         )
         if folder:
             cfg = self._config_store.load()
@@ -2820,14 +2828,17 @@ class SortwiseApp(ctk.CTk):
             self._config_store.save(cfg)
             self._crumb_label.configure(text=f"> {folder}")
             self._set_status(f"Scanning folder: {folder}", tone="ok")
-            self.load_document_tree()
+            open_in_dolphin(folder)
+            self.start_disk_scan([folder])
 
     def pick_custom_file(self) -> None:
         """Allow user to pick an individual document from disk to inspect & route."""
+        initial = str(Path.home())
+        open_in_dolphin(initial)
         file_path = filedialog.askopenfilename(
             parent=self,
             title="Choose Document to Route",
-            initialdir=str(Path.home()),
+            initialdir=initial,
             filetypes=[("Documents", "*.pdf *.docx *.pptx"), ("All Files", "*.*")],
         )
         if file_path:
@@ -2939,57 +2950,32 @@ class SortwiseApp(ctk.CTk):
                 text=f"{stats.get('total_count', 0)} documents · {human_size(stats.get('archived_size', 0))}"
             )
 
-    # -- background calibration -------------------------------------------- #
+    # -- calibration ------------------------------------------------------- #
     def _calibrate_pending_async(self) -> None:
-        # Deep-scan hits already carry a calibrated keyword rating from the
-        # scanner, so we do not re-extract hundreds of PDFs through the neural
-        # classifier; only genuine intake files are refined here.
+        """Instant sub-millisecond calibration using calibrated taxonomy scoring."""
         pending = [
             item
             for item in _iter_files(self._tree)
-            if item.pending and item.path and not item.scan
+            if item.pending and item.path
         ]
-        if not pending or self._classify_running:
+        if not pending:
             return
-        config = self._config_store.load()
-        service = self._service
-        paths = [item.path for item in pending if item.path]
-
-        def work() -> dict[str, tuple[str, float, float, str]]:
-            classifier = service.classifier(config)
-            results: dict[str, tuple[str, float, float, str]] = {}
-            for path in paths:
-                try:
-                    document = extract_document(path)
-                    decision = classifier.classify_document(document)
-                except Exception:  # noqa: BLE001 - stay on the heuristic values
-                    continue
-                results[path] = (
-                    decision.subject, float(decision.confidence),
-                    float(decision.entropy), str(decision.status),
-                )
-            return results
-
-        def done(results: dict[str, tuple[str, float, float, str]]) -> None:
-            self._classify_running = False
-            if not results:
-                return
-            for path, (subject, confidence, _entropy, status) in results.items():
-                item = self._items_by_path.get(path)
-                if item is not None:
-                    item.subject = subject
-                    item.confidence = confidence
-                    item.status = status
+        taxonomy = get_subject_taxonomy()
+        updated = False
+        for item in pending:
+            if not getattr(item, "ranking", None) or not item.confidence:
+                rating = rate_document(item.label, taxonomy)
+                item.subject = rating.subject
+                item.confidence = rating.confidence
+                item.entropy = rating.entropy
+                item.status = rating.status
+                item.ranking = list(rating.ranking)
+                updated = True
+        if updated:
             self._render_table()
             self._refresh_badges()
             if self._selected is not None and self._selected.is_file:
                 self._show_item(self._selected)
-
-        def failed(_exc: BaseException) -> None:
-            self._classify_running = False
-
-        self._classify_running = True
-        self._submit(work, on_done=done, on_error=failed, manage_busy=False)
 
     # -- selection & inspector --------------------------------------------- #
     def _select_item(self, item: DocItem) -> None:
