@@ -506,7 +506,7 @@ class DiskScanner:
         def worker() -> None:
             while not stop.is_set():
                 try:
-                    directory, depth, device = work.get(timeout=0.2)
+                    directory, depth, device = work.get(timeout=0.1)
                 except _queue.Empty:
                     continue
                 try:
@@ -525,11 +525,14 @@ class DiskScanner:
                             cancel,
                             active_prefixes,
                         )
-                except OSError:
+                except Exception:
                     pass
                 finally:
                     work.task_done()
-                    emit()
+                    try:
+                        emit()
+                    except Exception:
+                        pass
 
         for path, device in root_items:
             work.put((path, 0, device))
@@ -541,11 +544,25 @@ class DiskScanner:
         for thread in threads:
             thread.start()
 
-        work.join()
+        # Safely wait for workers: if cancelled, drain remaining tasks to exit immediately
+        while not work.empty() and not cancel.is_set():
+            time.sleep(0.02)
+        if cancel.is_set():
+            while True:
+                try:
+                    work.get_nowait()
+                    work.task_done()
+                except _queue.Empty:
+                    break
+        else:
+            work.join()
         stop.set()
         for thread in threads:
-            thread.join(timeout=2.0)
-        emit(force=True, done=True)
+            thread.join(timeout=1.0)
+        try:
+            emit(force=True, done=True)
+        except Exception:
+            pass
 
         results.sort(key=lambda doc: (-doc.confidence, -doc.size, doc.name.casefold()))
         return results
@@ -568,7 +585,7 @@ class DiskScanner:
     ) -> None:
         try:
             entries: list[os.DirEntry[str]] = list(os.scandir(directory))
-        except OSError:
+        except Exception:
             return
 
         with lock:
@@ -590,7 +607,7 @@ class DiskScanner:
                         continue
                     try:
                         child_device = entry.stat(follow_symlinks=False).st_dev
-                    except OSError:
+                    except Exception:
                         continue
                     if not self.cross_devices and child_device != device:
                         continue
@@ -605,32 +622,35 @@ class DiskScanner:
                         continue
                     try:
                         stat = entry.stat(follow_symlinks=False)
-                    except OSError:
+                    except Exception:
                         continue
-                    rating = rate_document(entry.name, taxonomy)
-                    document = ScannedDocument(
-                        path=entry.path,
-                        name=entry.name,
-                        file_type=extension,
-                        size=int(stat.st_size),
-                        size_human=human_size(stat.st_size),
-                        modified=datetime.fromtimestamp(stat.st_mtime).isoformat(
-                            timespec="seconds"
-                        ),
-                        subject=rating.subject,
-                        confidence=rating.confidence,
-                        entropy=rating.entropy,
-                        status=rating.status,
-                        score=rating.score,
-                        ranking=rating.ranking,
-                    )
-                    with lock:
-                        results.append(document)
-                        counters["documents"] = int(counters["documents"]) + 1
-                        counters["bytes_seen"] = int(counters["bytes_seen"]) + int(
-                            stat.st_size
+                    try:
+                        rating = rate_document(entry.name, taxonomy)
+                        document = ScannedDocument(
+                            path=entry.path,
+                            name=entry.name,
+                            file_type=extension,
+                            size=int(stat.st_size),
+                            size_human=human_size(stat.st_size),
+                            modified=datetime.fromtimestamp(stat.st_mtime).isoformat(
+                                timespec="seconds"
+                            ),
+                            subject=rating.subject,
+                            confidence=rating.confidence,
+                            entropy=rating.entropy,
+                            status=rating.status,
+                            score=rating.score,
+                            ranking=rating.ranking,
                         )
-            except OSError:
+                        with lock:
+                            results.append(document)
+                            counters["documents"] = int(counters["documents"]) + 1
+                            counters["bytes_seen"] = int(counters["bytes_seen"]) + int(
+                                stat.st_size
+                            )
+                    except Exception:
+                        continue
+            except Exception:
                 continue
 
 

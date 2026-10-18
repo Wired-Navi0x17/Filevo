@@ -53,19 +53,125 @@ Usage
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Ensure Nix-ld shared libraries (e.g. libstdc++.so.6) are reachable on NixOS
+_nix_lib = "/run/current-system/sw/share/nix-ld/lib"
+if os.path.isdir(_nix_lib):
+    _curr_ld = os.environ.get("LD_LIBRARY_PATH", "")
+    if _nix_lib not in _curr_ld:
+        os.environ["LD_LIBRARY_PATH"] = f"{_nix_lib}:{_curr_ld}".rstrip(":")
+        if not os.environ.get("_SORTWISE_REEXEC"):
+            os.environ["_SORTWISE_REEXEC"] = "1"
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception:
+                pass
+
 import argparse
 import glob
+import json
 import math
-import os
 import queue
 import shutil
+import socket
 import subprocess
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
+
+
+class SingleInstanceLock:
+    """Ensures only one instance of Sortwise runs at a time.
+
+    If an existing instance is found, signals it to focus its window and
+    causes the second process to exit cleanly.
+    """
+
+    def __init__(self, app_name: str = "sortwise") -> None:
+        self.app_name = app_name
+        self._server_sock: socket.socket | None = None
+        self._listener_thread: threading.Thread | None = None
+        self._on_focus: Callable[[], None] | None = None
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/user-{os.getuid()}"
+        try:
+            os.makedirs(runtime_dir, exist_ok=True)
+        except OSError:
+            runtime_dir = "/tmp"
+        self.sock_path = os.path.join(runtime_dir, f"{app_name}.sock")
+
+    def acquire(self, on_focus: Callable[[], None] | None = None) -> bool:
+        """Attempt to acquire the single-instance lock.
+
+        Returns True if this is the primary instance.
+        Returns False if an existing instance was notified (caller should exit).
+        """
+        self._on_focus = on_focus
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(self.sock_path)
+            sock.listen(5)
+            self._server_sock = sock
+            self._start_listener()
+            return True
+        except OSError:
+            # Check if existing instance is actually listening
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.settimeout(1.5)
+                client.connect(self.sock_path)
+                client.sendall(b"FOCUS\n")
+                client.close()
+                return False
+            except OSError:
+                # Stale socket from dead process
+                try:
+                    if os.path.exists(self.sock_path):
+                        os.unlink(self.sock_path)
+                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    sock.bind(self.sock_path)
+                    sock.listen(5)
+                    self._server_sock = sock
+                    self._start_listener()
+                    return True
+                except OSError:
+                    return True
+
+    def _start_listener(self) -> None:
+        def listen() -> None:
+            while self._server_sock:
+                try:
+                    conn, _ = self._server_sock.accept()
+                    data = conn.recv(1024)
+                    conn.close()
+                    if b"FOCUS" in data and self._on_focus:
+                        try:
+                            self._on_focus()
+                        except Exception:
+                            pass
+                except OSError:
+                    break
+
+        self._listener_thread = threading.Thread(
+            target=listen, name="sortwise-instance-listener", daemon=True
+        )
+        self._listener_thread.start()
+
+    def release(self) -> None:
+        if self._server_sock:
+            try:
+                self._server_sock.close()
+            except OSError:
+                pass
+            self._server_sock = None
+        try:
+            if os.path.exists(self.sock_path):
+                os.unlink(self.sock_path)
+        except OSError:
+            pass
 
 
 def open_in_dolphin(target: str | Path | None = None) -> None:
@@ -249,13 +355,6 @@ def native_choose_file(
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-# Ensure Nix-ld shared libraries (e.g. libstdc++.so.6) are reachable on NixOS
-_nix_lib = "/run/current-system/sw/share/nix-ld/lib"
-if os.path.isdir(_nix_lib):
-    _curr_ld = os.environ.get("LD_LIBRARY_PATH", "")
-    if _nix_lib not in _curr_ld:
-        os.environ["LD_LIBRARY_PATH"] = f"{_nix_lib}:{_curr_ld}".rstrip(":")
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -1681,6 +1780,15 @@ class SortwiseApp(ctk.CTk):
         except tk.TclError:  # pragma: no cover - headless
             pass
 
+    def bring_to_front(self) -> None:
+        """Bring this window to the foreground if another instance launch was attempted."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except tk.TclError:
+            pass
+
     def _on_close(self) -> None:
         self._closed = True
         if self._poll_job is not None:
@@ -2557,20 +2665,70 @@ class SortwiseApp(ctk.CTk):
 
         rows = self._visible_rows()
         if not rows:
-            message = "Nothing to show here. Drop supported documents in the intake folder and press 'Scan Watch Dir'."
-            if self._view[0] == SCAN_MODE:
-                message = (
-                    "No documents discovered yet. Press 'Scan Disk' to walk a folder or the whole home "
-                    "folder for unorganised study documents."
-                )
-            hint = self._section_label(
+            cfg = self._config_store.load()
+            active_folder = getattr(self, "_active_custom_folder", None) or cfg.watch_folder
+            folder_name = Path(active_folder).name if active_folder else "Folder"
+
+            empty_card = ctk.CTkFrame(
                 self._table_body,
-                message,
-                font=self._ui_font(self._theme.FONT_BASE),
-                wraplength=560, justify="left",
+                fg_color=self._theme.SURFACE,
+                border_width=1,
+                border_color=self._theme.BORDER,
+                corner_radius=12,
             )
-            hint.grid(row=0, column=0, columnspan=len(COLUMNS), sticky="w", padx=16, pady=28)
-            self._table_rows.append(hint)
+            empty_card.grid(row=0, column=0, columnspan=len(COLUMNS), sticky="ew", padx=16, pady=24)
+
+            title_lbl = self._section_label(
+                empty_card,
+                f"📂 {folder_name} is empty",
+                font=self._ui_font(self._theme.FONT_TITLE, "bold"),
+                text_color=self._theme.TEXT,
+            )
+            title_lbl.pack(anchor="w", padx=20, pady=(18, 4))
+
+            desc_lbl = self._section_label(
+                empty_card,
+                f"No supported documents (.pdf, .docx, .pptx, .txt, .md) were found in:\n{active_folder}\n\n"
+                "You can select another folder, pick an individual file, or drop documents into this folder.",
+                font=self._ui_font(self._theme.FONT_BASE),
+                text_color=self._theme.TEXT_MUTED,
+                wraplength=620,
+                justify="left",
+            )
+            desc_lbl.pack(anchor="w", padx=20, pady=(0, 16))
+
+            btn_box = ctk.CTkFrame(empty_card, fg_color="transparent")
+            btn_box.pack(anchor="w", padx=20, pady=(0, 18))
+
+            ctk.CTkButton(
+                btn_box,
+                text="📁 Choose Another Folder",
+                width=176,
+                height=34,
+                corner_radius=self._theme.RADIUS_SMALL,
+                fg_color=self._theme.ACCENT_DEEP,
+                hover_color=self._theme.ACCENT,
+                text_color="#ffffff",
+                font=self._ui_font(self._theme.FONT_BUTTON, "bold"),
+                command=self.pick_custom_folder,
+            ).pack(side="left", padx=(0, 10))
+
+            ctk.CTkButton(
+                btn_box,
+                text="📄 Pick Document",
+                width=140,
+                height=34,
+                corner_radius=self._theme.RADIUS_SMALL,
+                fg_color=self._theme.ELEVATED,
+                hover_color=self._theme.HOVER,
+                border_width=1,
+                border_color=self._theme.BORDER,
+                text_color=self._theme.TEXT,
+                font=self._ui_font(self._theme.FONT_BUTTON),
+                command=self.pick_custom_file,
+            ).pack(side="left")
+
+            self._table_rows.append(empty_card)
             return
 
         max_display = 150
@@ -2786,6 +2944,24 @@ class SortwiseApp(ctk.CTk):
         config = self._config_store.load()
         if not roots:
             roots = [config.watch_folder]
+
+        # Fast pre-check: if a single root directory is empty on disk, resolve immediately in milliseconds
+        if len(roots) == 1 and Path(roots[0]).is_dir():
+            p = Path(roots[0])
+            self._active_custom_folder = str(p)
+            try:
+                entries = [e for e in os.scandir(p) if not e.name.startswith(".")]
+                if not entries:
+                    self._scan_running = False
+                    self._set_busy(False, "")
+                    self._show_bulk_bar(False)
+                    self._scan_results = []
+                    self._set_view((SCAN_MODE, None))
+                    self._set_status(f"Folder is empty · 0 documents found in {p.name}", tone="idle")
+                    self._render_table()
+                    return
+            except Exception:
+                pass
 
         self._scan_running = True
         self._scan_cancel = threading.Event()
@@ -3046,8 +3222,112 @@ class SortwiseApp(ctk.CTk):
         cfg.watch_folder = folder
         self._config_store.save(cfg)
         self._crumb_label.configure(text=f"> {folder}")
-        self._set_status(f"Scanning folder: {folder}", tone="ok")
-        self.start_disk_scan([folder])
+        self._load_custom_folder(folder)
+
+    def _load_custom_folder(self, folder: str) -> None:
+        """Instantly inspect and load the chosen folder's content without hanging."""
+        p = Path(folder).resolve()
+        if not p.is_dir():
+            self._set_status(f"Not a folder: {folder}", tone="warn")
+            return
+
+        self._active_custom_folder = str(p)
+        folder_name = p.name or str(p)
+        taxonomy = get_subject_taxonomy()
+
+        found_docs: list[DocItem] = []
+        try:
+            entries = list(os.scandir(p))
+        except Exception as exc:
+            self._set_status(f"Could not read folder: {exc}", tone="error")
+            return
+
+        for entry in entries:
+            try:
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_file(follow_symlinks=False):
+                    ext = entry.name.rpartition(".")[2].casefold()
+                    if ext in ("pdf", "docx", "pptx", "txt", "md"):
+                        stat = entry.stat(follow_symlinks=False)
+                        rating = rate_document(entry.name, taxonomy)
+                        item = DocItem(
+                            key=f"file:{entry.path}",
+                            label=entry.name,
+                            kind="file",
+                            path=entry.path,
+                            size=int(stat.st_size),
+                            file_type=ext,
+                            subject=rating.subject,
+                            confidence=rating.confidence,
+                            entropy=rating.entropy,
+                            status=rating.status,
+                            modified=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                            pending=True,
+                            scan=True,
+                            ranking=list(rating.ranking),
+                        )
+                        found_docs.append(item)
+                elif entry.is_dir(follow_symlinks=False):
+                    try:
+                        for sub_entry in os.scandir(entry.path):
+                            if sub_entry.name.startswith("."):
+                                continue
+                            if sub_entry.is_file(follow_symlinks=False):
+                                ext = sub_entry.name.rpartition(".")[2].casefold()
+                                if ext in ("pdf", "docx", "pptx", "txt", "md"):
+                                    stat = sub_entry.stat(follow_symlinks=False)
+                                    rating = rate_document(sub_entry.name, taxonomy)
+                                    item = DocItem(
+                                        key=f"file:{sub_entry.path}",
+                                        label=sub_entry.name,
+                                        kind="file",
+                                        path=sub_entry.path,
+                                        size=int(stat.st_size),
+                                        file_type=ext,
+                                        subject=rating.subject,
+                                        confidence=rating.confidence,
+                                        entropy=rating.entropy,
+                                        status=rating.status,
+                                        modified=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                                        pending=True,
+                                        scan=True,
+                                        ranking=list(rating.ranking),
+                                    )
+                                    found_docs.append(item)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+        found_docs.sort(key=lambda doc: (-doc.confidence, -doc.size, doc.label.casefold()))
+
+        self._scan_results = found_docs
+        self._bulk_selected.clear()
+        self._scan_running = False
+        self._set_busy(False, "")
+
+        intake_node = next((node for node in self._tree if node.card == "downloads"), None)
+        if intake_node is not None:
+            intake_node.label = folder_name
+            intake_node.path = str(p)
+            intake_node.children = list(found_docs)
+            intake_node.size = sum(child.size for child in found_docs)
+
+        self._index_all_tree()
+        self._refresh_badges()
+        self._set_view((SCAN_MODE, None))
+        self._show_bulk_bar(bool(found_docs))
+        self._refresh_bulk_summary()
+
+        if found_docs:
+            confident_count = sum(1 for d in found_docs if d.status == STATUS_CONFIDENT)
+            self._set_status(f"Loaded {len(found_docs)} document(s) from {folder_name} ({confident_count} confident)", tone="ok")
+            self._select_item(found_docs[0])
+        else:
+            self._set_status(f"Folder is empty · 0 documents found in {folder_name}", tone="idle")
+            self._clear_inspector()
+            self._render_table()
 
     def pick_custom_file(self) -> None:
         """Allow user to pick an individual document from disk to inspect & route."""
@@ -3850,6 +4130,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{APP_NAME} {__version__} (native desktop)")
         return 0
 
+    lock = SingleInstanceLock()
+    active_app: list[SortwiseApp | None] = [None]
+
+    def on_focus_requested() -> None:
+        if active_app[0] is not None:
+            active_app[0].after(0, active_app[0].bring_to_front)
+
+    if not lock.acquire(on_focus=on_focus_requested):
+        print(f"[{APP_NAME.lower()}] Another instance is already running. Focused existing window.")
+        return 0
+
     config_path = Path(args.config).expanduser() if args.config else None
     ledger_path = Path(args.ledger).expanduser() if args.ledger else None
 
@@ -3859,10 +4150,12 @@ def main(argv: list[str] | None = None) -> int:
             ledger_path=ledger_path,
             show_scan_dialog=bool(getattr(args, "scan", False)),
         )
+        active_app[0] = app
     except tk.TclError as exc:  # pragma: no cover - no display available
+        lock.release()
         print(
-            f"[sortwise] could not open a window ({exc}).\n"
-            "[sortwise] this is a native desktop app and needs an X11/Wayland display.",
+            f"[{APP_NAME.lower()}] could not open a window ({exc}).\n"
+            f"[{APP_NAME.lower()}] this is a native desktop app and needs an X11/Wayland display.",
             file=sys.stderr,
         )
         return 1
@@ -3876,7 +4169,10 @@ def main(argv: list[str] | None = None) -> int:
         app._config_store.update(overrides)  # noqa: SLF001 - session override
         app.after(180, app.load_document_tree)
 
-    app.mainloop()
+    try:
+        app.mainloop()
+    finally:
+        lock.release()
     return 0
 
 

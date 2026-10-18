@@ -260,6 +260,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if not (args.browser or args.no_window or args.print_url):
+        from src.native_app import main as native_main
+
+        return native_main(argv)
+
     host = args.host
     port = pick_port(host, args.port)
     url = f"http://{host}:{port}"
