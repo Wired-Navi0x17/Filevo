@@ -307,7 +307,7 @@ def rate_document(
     sample_text: str | None = None,
     threshold: float = CONFIDENCE_THRESHOLD,
     entropy_threshold: float = ENTROPY_THRESHOLD,
-    temperature: float = _RATING_TEMPERATURE,
+    temperature: float | None = None,
 ) -> ConfidenceRating:
     """Score a document (from content if available, falling back to filename) and rate it."""
     taxonomy = taxonomy if taxonomy is not None else get_subject_taxonomy()
@@ -319,21 +319,35 @@ def rate_document(
         except Exception:
             text = ""
 
-    eval_text = f"{name} {text}".strip()
-    scores = keyword_scores(eval_text, taxonomy)
+    eval_text = f"{name}\n{text}".strip()
     try:
-        from .rlcd import get_default_policy_store
-        ps = get_default_policy_store()
-        for label in scores:
-            scores[label] += ps.get_bias(label)
+        from .rlcd import get_default_router
+        router = get_default_router()
+        dec, _ = router.classify(
+            eval_text,
+            taxonomy,
+            threshold=threshold,
+            entropy_threshold=entropy_threshold,
+            temperature=temperature,
+        )
+        return ConfidenceRating(
+            subject=dec.subject,
+            score=dec.confidence,
+            confidence=dec.confidence,
+            entropy=dec.entropy,
+            status=dec.status,
+            ranking=tuple(dec.ranking),
+            agreement=dec.agreement,
+            disagreement=dec.disagreement,
+        )
     except Exception:
-        pass
-    return rate_scores(
-        scores,
-        threshold=threshold,
-        entropy_threshold=entropy_threshold,
-        temperature=temperature,
-    )
+        scores = keyword_scores(eval_text, taxonomy)
+        return rate_scores(
+            scores,
+            threshold=threshold,
+            entropy_threshold=entropy_threshold,
+            temperature=temperature if temperature is not None else _RATING_TEMPERATURE,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -652,7 +666,7 @@ class DiskScanner:
                     except Exception:
                         continue
                     try:
-                        rating = rate_document(entry.name, taxonomy)
+                        rating = rate_document(entry.name, taxonomy, path=entry.path)
                         document = ScannedDocument(
                             path=entry.path,
                             name=entry.name,

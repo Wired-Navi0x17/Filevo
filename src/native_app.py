@@ -1259,6 +1259,311 @@ class SettingsDialog(ctk.CTkToplevel):
         self._on_save(changes)
 
 
+class TrainingDialog(ctk.CTkToplevel):
+    """Interactive modal dialog allowing users to choose a training folder,
+    preview detected course categories and documents, and run RLCD prototype training."""
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        initial_dir: str,
+        target_root: str,
+        on_complete: Callable[[], None],
+        theme: type[Theme] = Theme,
+    ) -> None:
+        super().__init__(master)
+        self._theme = theme
+        self._on_complete = on_complete
+        self._initial_dir = initial_dir
+        self._target_root = target_root
+        self._is_training = False
+
+        self.title("Train AI Semantic Prototypes (RLCD)")
+        self.geometry("740x620")
+        self.resizable(False, False)
+        self.configure(fg_color=theme.BG)
+        self.transient(master)  # type: ignore[arg-type]
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        ctk.CTkLabel(
+            self, text="TRAIN RLCD PROTOTYPES", font=theme.ui_font(theme.FONT_HEADER_SMALL, "bold"),
+            text_color=theme.TEXT, anchor="w",
+        ).pack(fill="x", padx=26, pady=(22, 4))
+        ctk.CTkLabel(
+            self,
+            text="Calibrate dense semantic bi-encoder prototypes and dynamic subject taxonomy\n"
+                 "directly from your organized course folders.",
+            font=theme.ui_font(theme.FONT_BASE), text_color=theme.TEXT_FAINT,
+            justify="left", anchor="w",
+        ).pack(fill="x", padx=26, pady=(0, 16))
+
+        # Main Card
+        body = ctk.CTkFrame(
+            self, fg_color=theme.SURFACE, corner_radius=theme.RADIUS,
+            border_width=1, border_color=theme.BORDER,
+        )
+        body.pack(fill="both", expand=True, padx=26, pady=(0, 16))
+
+        # Folder path selection
+        path_box = ctk.CTkFrame(body, fg_color="transparent")
+        path_box.pack(fill="x", padx=20, pady=(16, 6))
+        path_box.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            path_box, text="TRAINING SOURCE DIRECTORY",
+            font=theme.ui_font(theme.FONT_SECTION, "bold"),
+            text_color=theme.TEXT_FAINT, anchor="w",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        self._path_entry = ctk.CTkEntry(
+            path_box, height=42, corner_radius=theme.RADIUS_SMALL,
+            fg_color=theme.BG, border_color=theme.BORDER,
+            text_color=theme.TEXT, font=theme.ui_font(theme.FONT_BASE),
+        )
+        default_path = initial_dir if (initial_dir and Path(initial_dir).is_dir()) else target_root
+        self._path_entry.insert(0, default_path)
+        self._path_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+
+        ctk.CTkButton(
+            path_box, text="📁 Browse…", width=110, height=42,
+            corner_radius=theme.RADIUS_SMALL,
+            fg_color=theme.ELEVATED, hover_color=theme.HOVER,
+            border_width=1, border_color=theme.BORDER,
+            text_color=theme.TEXT, font=theme.ui_font(theme.FONT_BASE),
+            command=self._browse,
+        ).grid(row=1, column=1, sticky="e")
+
+        # Quick preset buttons
+        chips_frame = ctk.CTkFrame(body, fg_color="transparent")
+        chips_frame.pack(fill="x", padx=20, pady=(0, 10))
+        if initial_dir and initial_dir != target_root:
+            ctk.CTkButton(
+                chips_frame, text="Current Folder", height=28,
+                corner_radius=14, fg_color=theme.ELEVATED, hover_color=theme.HOVER,
+                border_width=1, border_color=theme.BORDER, text_color=theme.TEXT_MUTED,
+                font=theme.ui_font(theme.FONT_PILL),
+                command=lambda: self._set_path(initial_dir),
+            ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            chips_frame, text="Target Library Root", height=28,
+            corner_radius=14, fg_color=theme.ELEVATED, hover_color=theme.HOVER,
+            border_width=1, border_color=theme.BORDER, text_color=theme.TEXT_MUTED,
+            font=theme.ui_font(theme.FONT_PILL),
+            command=lambda: self._set_path(target_root),
+        ).pack(side="left")
+
+        # Separator
+        ctk.CTkFrame(body, height=1, fg_color=theme.BORDER).pack(fill="x", padx=20, pady=(4, 10))
+
+        # Analysis / Category preview section
+        ctk.CTkLabel(
+            body, text="DETECTED CATEGORIES & SAMPLES",
+            font=theme.ui_font(theme.FONT_SECTION, "bold"),
+            text_color=theme.TEXT_FAINT, anchor="w",
+        ).pack(fill="x", padx=20, pady=(0, 6))
+
+        self._preview_scroll = ctk.CTkScrollableFrame(
+            body, height=140, fg_color=theme.BG,
+            border_width=1, border_color=theme.BORDER,
+            corner_radius=theme.RADIUS_SMALL,
+        )
+        self._preview_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+
+        # Progress bar
+        self._pbar = ctk.CTkProgressBar(
+            body, height=8, corner_radius=4, fg_color=theme.BG,
+            progress_color=theme.ACCENT,
+        )
+        self._pbar.set(0.0)
+        self._pbar.pack(fill="x", padx=20, pady=(0, 6))
+
+        self._status_lbl = ctk.CTkLabel(
+            body, text="Ready", font=theme.mono_font(theme.FONT_MONO_SMALL),
+            text_color=theme.TEXT_MUTED, anchor="w",
+        )
+        self._status_lbl.pack(fill="x", padx=20, pady=(0, 12))
+
+        # Bottom buttons
+        footer = ctk.CTkFrame(self, fg_color="transparent")
+        footer.pack(fill="x", padx=26, pady=(0, 18))
+
+        self._close_btn = ctk.CTkButton(
+            footer, text="Close", width=110, height=40, corner_radius=theme.RADIUS_SMALL,
+            fg_color=theme.ELEVATED, hover_color=theme.HOVER, border_width=1,
+            border_color=theme.BORDER, text_color=theme.TEXT,
+            font=theme.ui_font(theme.FONT_BUTTON), command=self._on_close,
+        )
+        self._close_btn.pack(side="left")
+
+        self._train_btn = ctk.CTkButton(
+            footer, text="🚀 Train Models", width=160, height=40,
+            corner_radius=theme.RADIUS_SMALL,
+            fg_color=theme.ACCENT, hover_color=theme.ACCENT_DEEP, text_color="#ffffff",
+            font=theme.ui_font(theme.FONT_BUTTON, "bold"), command=self._start_training,
+        )
+        self._train_btn.pack(side="right")
+
+        self.after(60, self._grab)
+        self.after(100, self._analyze_current_path)
+
+    def _grab(self) -> None:
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def _set_path(self, path: str) -> None:
+        self._path_entry.delete(0, "end")
+        self._path_entry.insert(0, path)
+        self._analyze_current_path()
+
+    def _browse(self) -> None:
+        initial = self._path_entry.get().strip() or str(Path.home())
+        chosen = native_choose_folder(parent=self, title="Select Training Folder", initial_dir=initial)
+        if chosen:
+            self._set_path(chosen)
+
+    def _analyze_current_path(self) -> None:
+        for child in self._preview_scroll.winfo_children():
+            child.destroy()
+
+        target_path = self._path_entry.get().strip()
+        p = Path(target_path).expanduser().resolve()
+        if not p.is_dir():
+            self._train_btn.configure(state="disabled")
+            self._status_lbl.configure(text=f"Selected path does not exist: {target_path}", text_color=self._theme.WARN)
+            return
+
+        from src.rlcd import discover_target_categories
+        cats = discover_target_categories(p)
+        if not cats:
+            self._train_btn.configure(state="disabled")
+            self._status_lbl.configure(text="No category subfolders found in selected directory.", text_color=self._theme.WARN)
+            msg = ctk.CTkLabel(
+                self._preview_scroll,
+                text="⚠️ No category subfolders found directly inside this folder.\n\n"
+                     "Sortwise trains prototype centroids from course/subject subdirectories\n"
+                     "(e.g., 'Semester 3/CS2227 - AI and ML', 'Semester 3/CS2203 - DBMS', etc.).\n\n"
+                     "Please select a parent folder that contains your organized course folders.",
+                font=self._theme.ui_font(self._theme.FONT_BASE),
+                text_color=self._theme.TEXT_MUTED,
+                justify="left",
+            )
+            msg.pack(padx=12, pady=12, anchor="w")
+            return
+
+        # Scan document counts per category
+        total_docs = 0
+        cat_counts: list[tuple[str, int]] = []
+        for cat in cats:
+            cat_dir = p / cat
+            count = 0
+            if cat_dir.is_dir():
+                for f in cat_dir.rglob("*"):
+                    if f.is_file() and not f.name.startswith("."):
+                        ext = f.suffix.lstrip(".").casefold()
+                        if ext in ("pdf", "docx", "pptx", "txt", "md"):
+                            count += 1
+            cat_counts.append((cat, count))
+            total_docs += count
+
+        header_lbl = ctk.CTkLabel(
+            self._preview_scroll,
+            text=f"✓ Detected {len(cats)} categories ({total_docs} supported documents):",
+            font=self._theme.ui_font(self._theme.FONT_BASE, "bold"),
+            text_color=self._theme.TEXT, anchor="w",
+        )
+        header_lbl.pack(padx=8, pady=(4, 6), anchor="w")
+
+        for cat, cnt in cat_counts:
+            row = ctk.CTkFrame(self._preview_scroll, fg_color="transparent")
+            row.pack(fill="x", padx=8, pady=2)
+            row.grid_columnconfigure(0, weight=1)
+
+            ctk.CTkLabel(
+                row, text=f"📁 {cat}",
+                font=self._theme.mono_font(self._theme.FONT_MONO_SMALL),
+                text_color=self._theme.TEXT_MUTED, anchor="w",
+            ).grid(row=0, column=0, sticky="w")
+
+            ctk.CTkLabel(
+                row, text=f"{cnt} doc{'s' if cnt != 1 else ''}",
+                font=self._theme.mono_font(self._theme.FONT_MONO_SMALL, "bold"),
+                text_color=self._theme.SUCCESS if cnt > 0 else self._theme.TEXT_FAINT,
+                anchor="e",
+            ).grid(row=0, column=1, sticky="e")
+
+        self._train_btn.configure(state="normal")
+        self._status_lbl.configure(
+            text=f"Ready to train on {len(cats)} categories ({total_docs} documents).",
+            text_color=self._theme.TEXT_MUTED,
+        )
+
+    def _start_training(self) -> None:
+        if self._is_training:
+            return
+        self._is_training = True
+        self._train_btn.configure(state="disabled", text="Training…")
+        self._close_btn.configure(state="disabled")
+        self._pbar.set(0.0)
+
+        target_path = self._path_entry.get().strip()
+
+        def worker():
+            from src.rlcd import train_prototypes_from_library
+            try:
+                def prog(cat: str, current: int, total: int):
+                    self.after(0, lambda c=cat, cur=current, tot=total: self._on_progress(c, cur, tot))
+
+                res = train_prototypes_from_library(target_path, progress_callback=prog)
+                self.after(0, lambda r=res: self._on_done(r))
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._on_error(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_progress(self, cat: str, current: int, total: int) -> None:
+        pct = current / max(1, total)
+        self._pbar.set(pct)
+        self._status_lbl.configure(
+            text=f"Calibrating prototypes: {cat} ({current}/{total})…",
+            text_color=self._theme.TEXT,
+        )
+
+    def _on_done(self, res: dict[str, Any]) -> None:
+        self._is_training = False
+        self._pbar.set(1.0)
+        if res.get("status") == "ok":
+            n_docs = res.get("total_documents", 0)
+            n_cats = res.get("categories_trained", 0)
+            self._status_lbl.configure(
+                text=f"✅ Calibration complete! {n_docs} documents trained across {n_cats} categories.",
+                text_color=self._theme.SUCCESS,
+            )
+            self._train_btn.configure(text="✅ Trained", state="disabled")
+            self._close_btn.configure(state="normal", text="Done")
+            try:
+                self._on_complete()
+            except Exception:
+                pass
+        else:
+            msg = res.get("message", "Training encountered an error.")
+            self._status_lbl.configure(text=f"⚠️ {msg}", text_color=self._theme.WARN)
+            self._train_btn.configure(text="🚀 Try Again", state="normal")
+            self._close_btn.configure(state="normal")
+
+    def _on_error(self, exc: Exception) -> None:
+        self._is_training = False
+        self._status_lbl.configure(text=f"❌ Training failed: {exc}", text_color=self._theme.WARN)
+        self._train_btn.configure(text="🚀 Try Again", state="normal")
+        self._close_btn.configure(state="normal")
+
+    def _on_close(self) -> None:
+        if self._is_training:
+            return
+        self.destroy()
+
+
 # --------------------------------------------------------------------------- #
 # Startup scanner dialogs
 # --------------------------------------------------------------------------- #
@@ -1731,6 +2036,7 @@ class SortwiseApp(ctk.CTk):
         self._op_mode: str = "move"  # "move" or "copy"
         self._subject_values: list[str] = [AUTO_SUBJECT, *subject_labels()]
         self._row_by_key: dict[str, ctk.CTkFrame] = {}
+        self._row_widgets: dict[str, tuple[PillBar, ctk.CTkLabel]] = {}
         self._search_job: str | None = None
 
         # View + navigation history
@@ -2659,6 +2965,7 @@ class SortwiseApp(ctk.CTk):
             row.destroy()
         self._table_rows = []
         self._row_by_key.clear()
+        self._row_widgets.clear()
 
         rows = self._visible_rows()
         if not rows:
@@ -2823,6 +3130,7 @@ class SortwiseApp(ctk.CTk):
             width=118, height=28,
         )
         status.grid(row=0, column=5, sticky="w", padx=(0, 4))
+        self._row_widgets[item.key] = (pill, status)
 
         def select(_event: tk.Event | None = None, target: DocItem = item) -> None:
             self._select_item(target)
@@ -2849,6 +3157,22 @@ class SortwiseApp(ctk.CTk):
         row.bind("<Enter>", lambda _e: hover(True))
         row.bind("<Leave>", lambda _e: hover(False))
         return row
+
+    def _sync_table_row(self, item: DocItem) -> None:
+        """Immediately synchronize table row widgets with updated classification rating."""
+        if not hasattr(self, "_row_widgets") or item.key not in self._row_widgets:
+            return
+        pill, status_lbl = self._row_widgets[item.key]
+        conf = item.confidence if item.confidence is not None else 0.0
+        status_text = "CONFIDENT" if item.status == STATUS_CONFIDENT else ("REVIEW" if item.status == STATUS_AMBIGUOUS else "—")
+        status_colour = self._status_color(item.status)
+        pill_colour = self._subject_color(item.subject) if item.subject else status_colour
+        pill.set(conf, f"{conf * 100:.1f}%", pill_colour)
+        status_lbl.configure(
+            text=status_text,
+            text_color=status_colour,
+            fg_color=mix(self._theme.BG, status_colour, 0.16),
+        )
 
     def _item_icon(self, item: DocItem) -> str:
         if item.is_file:
@@ -3240,20 +3564,34 @@ class SortwiseApp(ctk.CTk):
             self._set_status(f"Could not read folder: {exc}", tone="error")
             return
 
-        for entry in entries:
-            try:
-                if entry.name.startswith("."):
+        root_path = Path(p).resolve()
+        for dirpath, dirnames, filenames in os.walk(root_path, followlinks=False):
+            # Exclude hidden directories and development/cache trees
+            dirnames[:] = [
+                d for d in dirnames
+                if not d.startswith(".")
+                and d not in (
+                    "__pycache__", "node_modules", ".venv", "venv", ".git",
+                    ".pytest_cache", ".mypy_cache", "build", "dist", ".cache"
+                )
+            ]
+            for fname in sorted(filenames):
+                if fname.startswith("."):
                     continue
-                if entry.is_file(follow_symlinks=False):
-                    ext = entry.name.rpartition(".")[2].casefold()
-                    if ext in ("pdf", "docx", "pptx", "txt", "md"):
-                        stat = entry.stat(follow_symlinks=False)
-                        rating = rate_document(entry.name, taxonomy, path=entry.path)
+                ext = fname.rpartition(".")[2].casefold()
+                if ext in ("pdf", "docx", "pptx", "txt", "md"):
+                    file_path = os.path.join(dirpath, fname)
+                    try:
+                        stat = os.stat(file_path)
+                        rel_path = os.path.relpath(file_path, root_path)
+                        # Display relative subfolder path so nested folder structure is visible
+                        display_label = rel_path if dirpath != str(root_path) else fname
+                        rating = rate_document(fname, taxonomy, path=file_path)
                         item = DocItem(
-                            key=f"file:{entry.path}",
-                            label=entry.name,
+                            key=f"file:{file_path}",
+                            label=display_label,
                             kind="file",
-                            path=entry.path,
+                            path=file_path,
                             size=int(stat.st_size),
                             file_type=ext,
                             subject=rating.subject,
@@ -3268,37 +3606,8 @@ class SortwiseApp(ctk.CTk):
                             disagreement=getattr(rating, "disagreement", 0.0),
                         )
                         found_docs.append(item)
-                elif entry.is_dir(follow_symlinks=False):
-                    try:
-                        for sub_entry in os.scandir(entry.path):
-                            if sub_entry.name.startswith("."):
-                                continue
-                            if sub_entry.is_file(follow_symlinks=False):
-                                ext = sub_entry.name.rpartition(".")[2].casefold()
-                                if ext in ("pdf", "docx", "pptx", "txt", "md"):
-                                    stat = sub_entry.stat(follow_symlinks=False)
-                                    rating = rate_document(sub_entry.name, taxonomy, path=sub_entry.path)
-                                    item = DocItem(
-                                        key=f"file:{sub_entry.path}",
-                                        label=sub_entry.name,
-                                        kind="file",
-                                        path=sub_entry.path,
-                                        size=int(stat.st_size),
-                                        file_type=ext,
-                                        subject=rating.subject,
-                                        confidence=rating.confidence,
-                                        entropy=rating.entropy,
-                                        status=rating.status,
-                                        modified=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
-                                        pending=True,
-                                        scan=True,
-                                        ranking=list(rating.ranking),
-                                    )
-                                    found_docs.append(item)
                     except Exception:
-                        pass
-            except Exception:
-                continue
+                        continue
 
         found_docs.sort(key=lambda doc: (-doc.confidence, -doc.size, doc.label.casefold()))
 
@@ -3648,6 +3957,7 @@ class SortwiseApp(ctk.CTk):
                 item._content_evaluated = True
                 confidence = dec.confidence
                 entropy = dec.entropy
+                self._sync_table_row(item)
             except Exception:
                 pass
 
@@ -3800,6 +4110,7 @@ class SortwiseApp(ctk.CTk):
             target_folder = self._service.destination_folder(sub, config)
             current_stem = self._rename_entry.get().strip() or Path(self._selected.path or "doc").stem
             self._target_path_box.configure(text=f"{target_folder} / {current_stem}.{self._selected.file_type or 'pdf'}")
+            self._sync_table_row(self._selected)
             return
         entry = tax.get(subject, {})
         folder = self._service.destination_folder(subject, config)
@@ -3808,6 +4119,8 @@ class SortwiseApp(ctk.CTk):
         self._inspector_note.configure(
             text=f"Manual destination: {entry.get('code', '')} - {entry.get('name', subject)}".strip(" - ") + f"\n-> {folder}"
         )
+        self._selected.subject = subject
+        self._sync_table_row(self._selected)
 
     # -- routing ----------------------------------------------------------- #
     def route_document(self) -> None:
@@ -3921,33 +4234,21 @@ class SortwiseApp(ctk.CTk):
         )
 
     def train_library_models(self) -> None:
-        """Train and calibrate category prototype centroids directly on documents in the library."""
+        """Open the interactive RLCD Prototype Training Dialog."""
         config = self._config_store.load()
-        target_root = config.target_root
+        active = getattr(self, "_active_custom_folder", None)
+        target = config.target_root
 
-        def work() -> dict[str, Any]:
-            from src.rlcd import train_prototypes_from_library
-            return train_prototypes_from_library(target_root)
+        def on_trained() -> None:
+            self._set_status("RLCD Semantic Prototypes updated successfully.", tone="ok")
+            self.load_document_tree()
 
-        def done(result: dict[str, Any]) -> None:
-            if result.get("status") == "ok":
-                n_docs = result.get("total_documents", 0)
-                n_cats = result.get("categories_trained", 0)
-                self._set_status(
-                    f"Library training complete · {n_docs} documents processed across {n_cats} categories",
-                    tone="ok",
-                )
-                self.load_document_tree()
-            else:
-                msg = result.get("message", "Library training could not be completed.")
-                self._set_status(msg, tone="warn")
-
-        def failed(exc: BaseException) -> None:
-            self._set_status(f"Training failed: {exc}", tone="error")
-
-        self._submit(
-            work, on_done=done, on_error=failed,
-            busy_text="Training prototype centroids on library documents…",
+        TrainingDialog(
+            self,
+            initial_dir=active or target,
+            target_root=target,
+            on_complete=on_trained,
+            theme=self._theme,
         )
 
     def undo_last(self) -> None:

@@ -303,7 +303,10 @@ class RLCDPolicyStore:
             try:
                 with open(self.path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                self.biases = data.get("biases", {})
+                raw_biases = data.get("biases", {})
+                self.biases = {
+                    k: float(np.clip(float(v), -0.6, 0.6)) for k, v in raw_biases.items()
+                }
                 self.term_weights = data.get("term_weights", {})
                 self.centroids = data.get("centroids", {})
                 self.episodes = int(data.get("episodes", 0))
@@ -356,22 +359,22 @@ class RLCDPolicyStore:
                 reward = float(np.clip(1.0 * agreement, 0.2, 1.0))
                 self.agreements_count += 1
                 current_bias = self.biases.get(chosen_category, 0.0)
-                # Policy gradient update on category bias
+                # Policy gradient update on category bias with calibrated bounding [-0.6, 0.6]
                 self.biases[chosen_category] = float(
-                    current_bias + self.learning_rate * reward
+                    np.clip(current_bias + self.learning_rate * reward, -0.6, 0.6)
                 )
             else:
                 # User corrected the system prediction
                 reward = -0.5 * (1.0 - agreement)
                 self.overrides_count += 1
-                # Increase chosen category bias, decrease rejected category bias
+                # Increase chosen category bias, decrease rejected category bias with calibrated bounds
                 pred_bias = self.biases.get(predicted_category, 0.0)
                 chosen_bias = self.biases.get(chosen_category, 0.0)
                 self.biases[predicted_category] = float(
-                    pred_bias - self.learning_rate * (1.0 - agreement + 0.1)
+                    np.clip(pred_bias - self.learning_rate * (1.0 - agreement + 0.1), -0.6, 0.6)
                 )
                 self.biases[chosen_category] = float(
-                    chosen_bias + self.learning_rate * 1.0
+                    np.clip(chosen_bias + self.learning_rate * 1.0, -0.6, 0.6)
                 )
 
             self.cumulative_reward += reward
@@ -445,12 +448,10 @@ class RLCDRouter:
         padded = f" {clean} " if clean else " "
         tokens = set(clean.split())
 
-        scores: dict[str, float] = {}
+        has_match = False
+        raw_scores: dict[str, float] = {}
         for label, entry in taxonomy.items():
             score = 0.0
-            # Incorporate learned policy bias
-            score += self.policy_store.get_bias(label)
-
             code = normalise_text(str(entry.get("code", "")))
             if code and f" {code} " in padded:
                 score += 3.5
@@ -469,7 +470,18 @@ class RLCDRouter:
                     elif kw_norm in tokens:
                         score += 1.0
 
-            scores[label] = max(0.0, score)
+            raw_scores[label] = score
+            if score > 0:
+                has_match = True
+
+        scores: dict[str, float] = {}
+        for label in taxonomy:
+            raw = raw_scores.get(label, 0.0)
+            if has_match:
+                bias = float(np.clip(self.policy_store.get_bias(label), -0.6, 0.6))
+                scores[label] = max(0.0, raw + bias * 0.35)
+            else:
+                scores[label] = max(0.0, raw)
 
         return scores
 
