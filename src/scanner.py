@@ -212,6 +212,30 @@ class ConfidenceRating:
         return self.status == STATUS_CONFIDENT
 
 
+_COMPILED_PROFILES: dict[int, list[tuple[str, str, set[str], tuple[str, ...]]]] = {}
+
+
+def _get_compiled_taxonomy(taxonomy: dict[str, dict]) -> list[tuple[str, str, set[str], tuple[str, ...]]]:
+    tax_id = id(taxonomy)
+    compiled = _COMPILED_PROFILES.get(tax_id)
+    if compiled is None:
+        compiled = []
+        for label, entry in taxonomy.items():
+            code = normalise_token(str(entry.get("code", "")))
+            code_pad = f" {code} " if code else ""
+            name_tokens = {
+                t for t in normalise_token(str(entry.get("name", ""))).split() if len(t) > 3
+            }
+            kw_pads = tuple(
+                f" {normalise_token(str(k))} "
+                for k in entry.get("keywords", [])
+                if k and normalise_token(str(k))
+            )
+            compiled.append((label, code_pad, name_tokens, kw_pads))
+        _COMPILED_PROFILES[tax_id] = compiled
+    return compiled
+
+
 def keyword_scores(name: str, taxonomy: dict[str, dict]) -> dict[str, float]:
     """Transparent keyword match score for ``name`` against every subject.
 
@@ -223,18 +247,17 @@ def keyword_scores(name: str, taxonomy: dict[str, dict]) -> dict[str, float]:
     padded = f" {haystack} " if haystack else " "
     tokens = {token for token in haystack.split() if len(token) > 3}
 
+    compiled = _get_compiled_taxonomy(taxonomy)
     scores: dict[str, float] = {}
-    for label, entry in taxonomy.items():
+    for label, code_pad, name_tokens, kw_pads in compiled:
         score = 0.0
-        code = normalise_token(str(entry.get("code", "")))
-        if code and f" {code} " in padded:
+        if code_pad and code_pad in padded:
             score += _W_CODE
-        for token in normalise_token(str(entry.get("name", ""))).split():
-            if len(token) > 3 and token in tokens:
+        for token in name_tokens:
+            if token in tokens:
                 score += _W_NAME_TOKEN
-        for keyword in entry.get("keywords", []):
-            keyword_token = normalise_token(str(keyword))
-            if keyword_token and f" {keyword_token} " in padded:
+        for kw_pad in kw_pads:
+            if kw_pad in padded:
                 score += _W_KEYWORD
         scores[label] = score
     return scores

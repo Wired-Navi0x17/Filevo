@@ -265,10 +265,17 @@ SUBJECT_TAXONOMY: dict[str, dict] = {
 
 
 def get_subject_taxonomy(custom_taxonomy: dict[str, dict] | None = None) -> dict[str, dict]:
-    """Return a deep copy of the subject taxonomy or user-provided taxonomy."""
-    if custom_taxonomy:
-        return copy.deepcopy(custom_taxonomy)
-    return copy.deepcopy(SUBJECT_TAXONOMY)
+    """Return a fresh copy of the subject taxonomy or user-provided taxonomy."""
+    base = custom_taxonomy if custom_taxonomy is not None else SUBJECT_TAXONOMY
+    return {
+        k: {
+            "code": v.get("code", ""),
+            "name": v.get("name", ""),
+            "keywords": list(v.get("keywords", [])),
+            "syllabus": v.get("syllabus", ""),
+        }
+        for k, v in base.items()
+    }
 
 
 def subject_labels(custom_taxonomy: dict[str, dict] | None = None) -> list[str]:

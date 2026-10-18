@@ -688,16 +688,33 @@ def _page_count(path: Path, file_type: str, word_count: int) -> tuple[int | None
     return None, "pages"
 
 
+_INSPECT_CACHE: dict[tuple[str, float], dict[str, Any]] = {}
+
+
 def inspect_document(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Collect the metadata the inspector pane shows for one file."""
     target = expand_path(path)
     file_type = target.suffix.lstrip(".").casefold()
+    mtime = 0.0
+    size = 0
+    try:
+        st = target.stat()
+        mtime = st.st_mtime
+        size = st.st_size
+    except OSError:
+        pass
+
+    cache_key = (str(target), mtime)
+    cached = _INSPECT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     info: dict[str, Any] = {
         "path": str(target),
         "name": target.name,
         "file_type": file_type,
-        "size": 0,
-        "size_human": "-",
+        "size": size,
+        "size_human": human_size(size),
         "title": target.stem,
         "word_count": 0,
         "headings": [],
@@ -705,11 +722,6 @@ def inspect_document(path: str | os.PathLike[str]) -> dict[str, Any]:
         "page_label": "pages",
         "error": None,
     }
-    try:
-        info["size"] = target.stat().st_size
-        info["size_human"] = human_size(info["size"])
-    except OSError:
-        pass
     try:
         document = extract_document(str(target))
         info["title"] = document.title
@@ -721,6 +733,9 @@ def inspect_document(path: str | os.PathLike[str]) -> dict[str, Any]:
     info["pages"], info["page_label"] = _page_count(
         target, info["file_type"], int(info["word_count"])
     )
+    if len(_INSPECT_CACHE) > 500:
+        _INSPECT_CACHE.clear()
+    _INSPECT_CACHE[cache_key] = info
     return info
 
 
@@ -1470,6 +1485,8 @@ class SortwiseApp(ctk.CTk):
         self._rename_dirty = False
         self._op_mode: str = "move"  # "move" or "copy"
         self._subject_values: list[str] = [AUTO_SUBJECT, *subject_labels()]
+        self._row_by_key: dict[str, ctk.CTkFrame] = {}
+        self._search_job: str | None = None
 
         # View + navigation history
         self._view: tuple[str, str | None] = ("all", None)
@@ -1737,7 +1754,7 @@ class SortwiseApp(ctk.CTk):
             font=self._ui_font(self._theme.FONT_BASE),
         )
         self._search.grid(row=0, column=2, sticky="e", padx=(6, 14), pady=(10, 4))
-        self._search.bind("<KeyRelease>", lambda _e: self._render_table())
+        self._search.bind("<KeyRelease>", self._on_search_key)
 
         # Row 1: Actions & Controls Bar (Clean visual groups with clear separation)
         actions = ctk.CTkFrame(bar, fg_color="transparent")
@@ -1796,6 +1813,14 @@ class SortwiseApp(ctk.CTk):
         self._mode_label = ctk.CTkLabel(actions, text="", font=self._mono_font(self._theme.FONT_MONO_SMALL),
                                         text_color=self._theme.TEXT_FAINT)
         self._mode_label.pack(side="right", padx=(0, 4))
+
+    def _on_search_key(self, _e: Any = None) -> None:
+        if self._search_job is not None:
+            try:
+                self.after_cancel(self._search_job)
+            except Exception:
+                pass
+        self._search_job = self.after(110, self._render_table)
 
     def _nav_arrow(self, parent: tk.Misc, text: str, command: Callable[[], None]) -> ctk.CTkButton:
         button = ctk.CTkButton(
@@ -2381,6 +2406,7 @@ class SortwiseApp(ctk.CTk):
         for row in self._table_rows:
             row.destroy()
         self._table_rows = []
+        self._row_by_key.clear()
 
         rows = self._visible_rows()
         if not rows:
@@ -2405,6 +2431,7 @@ class SortwiseApp(ctk.CTk):
         for index, (item, depth) in enumerate(display_rows):
             row = self._table_row(item, depth, index)
             self._table_rows.append(row)
+            self._row_by_key[item.key] = row
 
         if len(rows) > max_display:
             more = self._section_label(
@@ -3023,8 +3050,22 @@ class SortwiseApp(ctk.CTk):
 
     # -- selection & inspector --------------------------------------------- #
     def _select_item(self, item: DocItem) -> None:
+        old_selected = self._selected
         self._selected = item
-        self._render_table()
+        if old_selected is not None and old_selected.key in self._row_by_key:
+            old_row = self._row_by_key[old_selected.key]
+            try:
+                old_row.configure(border_width=0, border_color=self._theme.BORDER)
+            except Exception:
+                pass
+        if item.key in self._row_by_key:
+            new_row = self._row_by_key[item.key]
+            try:
+                new_row.configure(border_width=1, border_color=self._theme.ACCENT)
+            except Exception:
+                pass
+        else:
+            self._render_table()
         self._show_item(item)
 
     def _clear_inspector(self) -> None:
