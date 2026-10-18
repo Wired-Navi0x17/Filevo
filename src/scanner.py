@@ -303,13 +303,24 @@ def rate_document(
     name: str,
     taxonomy: dict[str, dict] | None = None,
     *,
+    path: str | None = None,
+    sample_text: str | None = None,
     threshold: float = CONFIDENCE_THRESHOLD,
     entropy_threshold: float = ENTROPY_THRESHOLD,
     temperature: float = _RATING_TEMPERATURE,
 ) -> ConfidenceRating:
-    """Score a filename and rate it ``CONFIDENT`` / ``AMBIGUOUS`` with RLCD policy bias."""
+    """Score a document (from content if available, falling back to filename) and rate it."""
     taxonomy = taxonomy if taxonomy is not None else get_subject_taxonomy()
-    scores = keyword_scores(name, taxonomy)
+    text = sample_text or ""
+    if not text and path:
+        try:
+            from .rlcd import quick_extract_sample
+            text = quick_extract_sample(path, 1500)
+        except Exception:
+            text = ""
+
+    eval_text = f"{name} {text}".strip()
+    scores = keyword_scores(eval_text, taxonomy)
     try:
         from .rlcd import get_default_policy_store
         ps = get_default_policy_store()

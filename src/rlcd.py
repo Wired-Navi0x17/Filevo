@@ -61,7 +61,9 @@ __all__ = [
     "discover_target_categories",
     "get_default_policy_store",
     "get_default_router",
+    "quick_extract_sample",
     "tempered_softmax",
+    "train_prototypes_from_library",
 ]
 
 DEFAULT_MODEL_NAME = "all-MiniLM-L6-v2"
@@ -650,3 +652,123 @@ def get_default_router() -> RLCDRouter:
     if _default_router is None:
         _default_router = RLCDRouter(policy_store=get_default_policy_store())
     return _default_router
+
+
+# --------------------------------------------------------------------------- #
+# Library Document Training & Quick Sampling
+# --------------------------------------------------------------------------- #
+def quick_extract_sample(path: str | Path, max_chars: int = 2000) -> str:
+    """Quickly extract leading text from a document to allow content-aware classification."""
+    p = Path(path)
+    if not p.is_file():
+        return ""
+    ext = p.suffix.lstrip(".").casefold()
+    try:
+        if ext in ("txt", "md"):
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read(max_chars)
+        elif ext == "pdf":
+            import pymupdf
+            doc = pymupdf.open(str(p))
+            parts: list[str] = []
+            for page in doc[:3]:
+                t = page.get_text("text").strip()
+                if t:
+                    parts.append(t)
+                if sum(len(x) for x in parts) >= max_chars:
+                    break
+            doc.close()
+            return "\n".join(parts)[:max_chars]
+        elif ext in ("docx", "pptx"):
+            from .extractors import extract_document
+            edoc = extract_document(str(p))
+            return (edoc.title + "\n" + edoc.clean_text)[:max_chars]
+    except Exception:
+        pass
+    return ""
+
+
+def train_prototypes_from_library(
+    target_root: str | Path,
+    model_name: str = DEFAULT_MODEL_NAME,
+    policy_store: RLCDPolicyStore | None = None,
+    progress_callback: Any = None,
+) -> dict[str, Any]:
+    """Train and fine-tune category prototype centroids on the user's actual documents.
+
+    Walks each category folder inside target_root, extracts real text from all
+    PDF/DOCX/PPTX/TXT/MD files, computes dense embeddings, averages them into
+    ground-truth category centroids, and persists them into the RLCD policy store.
+    """
+    store = policy_store or get_default_policy_store()
+    root = Path(target_root).expanduser().resolve()
+    if not root.is_dir():
+        return {"status": "error", "message": f"Target root does not exist: {target_root}"}
+
+    from .extractors import extract_document
+    router = get_default_router()
+    model = router._get_model()
+
+    categories = discover_target_categories(root)
+    if not categories:
+        return {"status": "error", "message": f"No category subfolders found inside {target_root}"}
+
+    trained_stats: dict[str, int] = {}
+    total_docs = 0
+    total_words = 0
+
+    for cat_idx, cat in enumerate(categories):
+        cat_dir = root / cat
+        if not cat_dir.is_dir():
+            continue
+
+        cat_texts: list[str] = []
+        for file_path in cat_dir.rglob("*"):
+            if file_path.is_file() and not file_path.name.startswith("."):
+                ext = file_path.suffix.lstrip(".").casefold()
+                if ext in ("pdf", "docx", "pptx"):
+                    try:
+                        edoc = extract_document(str(file_path))
+                        if edoc.clean_text:
+                            text_body = f"{edoc.title}\n{' '.join(edoc.headings)}\n{edoc.clean_text[:4000]}"
+                            cat_texts.append(text_body)
+                            total_words += edoc.word_count
+                    except Exception:
+                        sample = quick_extract_sample(file_path, 2000)
+                        if sample:
+                            cat_texts.append(f"{file_path.stem}\n{sample}")
+                elif ext in ("txt", "md"):
+                    sample = quick_extract_sample(file_path, 2000)
+                    if sample:
+                        cat_texts.append(f"{file_path.stem}\n{sample}")
+                        total_words += len(sample.split())
+
+        if cat_texts:
+            total_docs += len(cat_texts)
+            trained_stats[cat] = len(cat_texts)
+            if model is not None:
+                try:
+                    embeds = model.encode(cat_texts, convert_to_numpy=True, normalize_embeddings=True)
+                    centroid = np.mean(embeds, axis=0)
+                    norm = np.linalg.norm(centroid)
+                    if norm > 0:
+                        centroid = centroid / norm
+                        store.centroids[cat] = [round(float(x), 6) for x in centroid]
+                except Exception:
+                    pass
+
+        if progress_callback:
+            try:
+                progress_callback(cat, cat_idx + 1, len(categories))
+            except Exception:
+                pass
+
+    store.save()
+    router._cached_centroids.clear()
+    return {
+        "status": "ok",
+        "categories_trained": len(trained_stats),
+        "total_documents": total_docs,
+        "total_words": total_words,
+        "category_counts": trained_stats,
+    }

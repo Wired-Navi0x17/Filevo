@@ -804,7 +804,7 @@ def build_document_tree(
             item.confidence = float(entry.get("confidence", 0.0) or 0.0)
             item.status = str(entry.get("status") or "")
         elif pending:
-            rating = rate_document(name, taxonomy)
+            rating = rate_document(name, taxonomy, path=path)
             item.subject = rating.subject
             item.confidence = rating.confidence
             item.entropy = rating.entropy
@@ -981,6 +981,7 @@ def inspect_document(path: str | os.PathLike[str]) -> dict[str, Any]:
         info["word_count"] = document.word_count
         info["headings"] = list(document.headings[:6])
         info["file_type"] = document.file_type
+        info["clean_text"] = document.clean_text
     except Exception as exc:  # noqa: BLE001 - shown to the user, never fatal
         info["error"] = str(exc)
     info["pages"], info["page_label"] = _page_count(
@@ -1206,16 +1207,9 @@ class SettingsDialog(ctk.CTkToplevel):
         btn_box.grid(row=row + 1, column=1, sticky="e", padx=(0, 20), pady=(0, 2))
 
         ctk.CTkButton(
-            btn_box, text="📂 Open Dolphin", width=130, height=44, corner_radius=self._theme.RADIUS_SMALL,
-            fg_color=self._theme.ACCENT, hover_color=self._theme.ACCENT_DEEP, text_color="#ffffff",
-            font=self._theme.ui_font(self._theme.FONT_BASE, "bold"),
-            command=lambda: open_in_dolphin(entry.get().strip()),
-        ).pack(side="left", padx=(0, 6))
-
-        ctk.CTkButton(
-            btn_box, text="Browse...", width=88, height=44, corner_radius=self._theme.RADIUS_SMALL,
+            btn_box, text="📁 Browse…", width=100, height=44, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ELEVATED, hover_color=self._theme.HOVER, border_width=1,
-            border_color=self._theme.BORDER, text_color=self._theme.TEXT_MUTED,
+            border_color=self._theme.BORDER, text_color=self._theme.TEXT,
             font=self._theme.ui_font(self._theme.FONT_BASE), command=lambda: self._browse(entry),
         ).pack(side="left")
         return entry
@@ -2060,6 +2054,9 @@ class SortwiseApp(ctk.CTk):
         # Group 3: History & Settings
         self._undo_button = self._action_button(
             actions, "↩ Undo", self.undo_last, accent=False, width=78, height=36
+        )
+        self._train_button = self._action_button(
+            actions, "🧠 Train Library", self.train_library_models, accent=False, width=128, height=36
         )
         self._settings_button = self._action_button(
             actions, "⚙ Settings", self.open_settings, accent=False, width=95, height=36
@@ -3251,7 +3248,7 @@ class SortwiseApp(ctk.CTk):
                     ext = entry.name.rpartition(".")[2].casefold()
                     if ext in ("pdf", "docx", "pptx", "txt", "md"):
                         stat = entry.stat(follow_symlinks=False)
-                        rating = rate_document(entry.name, taxonomy)
+                        rating = rate_document(entry.name, taxonomy, path=entry.path)
                         item = DocItem(
                             key=f"file:{entry.path}",
                             label=entry.name,
@@ -3280,7 +3277,7 @@ class SortwiseApp(ctk.CTk):
                                 ext = sub_entry.name.rpartition(".")[2].casefold()
                                 if ext in ("pdf", "docx", "pptx", "txt", "md"):
                                     stat = sub_entry.stat(follow_symlinks=False)
-                                    rating = rate_document(sub_entry.name, taxonomy)
+                                    rating = rate_document(sub_entry.name, taxonomy, path=sub_entry.path)
                                     item = DocItem(
                                         key=f"file:{sub_entry.path}",
                                         label=sub_entry.name,
@@ -3473,7 +3470,7 @@ class SortwiseApp(ctk.CTk):
         updated = False
         for item in pending:
             if not getattr(item, "ranking", None) or not item.confidence:
-                rating = rate_document(item.label, taxonomy)
+                rating = rate_document(item.label, taxonomy, path=item.path)
                 item.subject = rating.subject
                 item.confidence = rating.confidence
                 item.entropy = rating.entropy
@@ -3621,14 +3618,20 @@ class SortwiseApp(ctk.CTk):
         entropy = item.entropy if item.entropy is not None else 0.0
         state = "pending" if item.pending else "archived"
 
-        # If RLCD agreement is not yet evaluated for this file, compute it now
-        if item.path and getattr(item, "agreement", None) is None:
+        # Content-aware classification using real file text
+        if item.path and (getattr(item, "agreement", None) is None or not getattr(item, "_content_evaluated", False)):
             try:
                 from src.rlcd import get_default_router
                 router = get_default_router()
-                eval_text = item.label
-                if info and info.get("title"):
-                    eval_text = f"{info['title']} {eval_text}"
+                eval_parts = [item.label]
+                if info:
+                    if info.get("title") and info["title"] != item.label:
+                        eval_parts.append(info["title"])
+                    if info.get("headings"):
+                        eval_parts.extend(info["headings"][:6])
+                    if info.get("clean_text"):
+                        eval_parts.append(info["clean_text"][:4000])
+                eval_text = "\n".join(eval_parts)
                 dec, _ = router.classify(
                     eval_text,
                     taxonomy,
@@ -3642,6 +3645,7 @@ class SortwiseApp(ctk.CTk):
                 item.agreement = dec.agreement
                 item.disagreement = dec.disagreement
                 item.ranking = list(dec.ranking)
+                item._content_evaluated = True
                 confidence = dec.confidence
                 entropy = dec.entropy
             except Exception:
@@ -3914,6 +3918,36 @@ class SortwiseApp(ctk.CTk):
             work, on_done=done,
             on_error=lambda exc: self._show_error("Auto-route failed", exc),
             busy_text="Auto-routing confident documents…",
+        )
+
+    def train_library_models(self) -> None:
+        """Train and calibrate category prototype centroids directly on documents in the library."""
+        config = self._config_store.load()
+        target_root = config.target_root
+
+        def work() -> dict[str, Any]:
+            from src.rlcd import train_prototypes_from_library
+            return train_prototypes_from_library(target_root)
+
+        def done(result: dict[str, Any]) -> None:
+            if result.get("status") == "ok":
+                n_docs = result.get("total_documents", 0)
+                n_cats = result.get("categories_trained", 0)
+                self._set_status(
+                    f"Library training complete · {n_docs} documents processed across {n_cats} categories",
+                    tone="ok",
+                )
+                self.load_document_tree()
+            else:
+                msg = result.get("message", "Library training could not be completed.")
+                self._set_status(msg, tone="warn")
+
+        def failed(exc: BaseException) -> None:
+            self._set_status(f"Training failed: {exc}", tone="error")
+
+        self._submit(
+            work, on_done=done, on_error=failed,
+            busy_text="Training prototype centroids on library documents…",
         )
 
     def undo_last(self) -> None:

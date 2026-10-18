@@ -175,3 +175,38 @@ def test_rlcd_routing_and_disagreement():
         assert decision.agreement >= 0.75
         assert decision.status == STATUS_CONFIDENT
         assert decision.ranking[0][0] == "Machine Learning"
+
+
+def test_quick_extract_sample_and_library_training():
+    from src.rlcd import quick_extract_sample, train_prototypes_from_library
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root = Path(tmp_dir)
+        maths_dir = root / "Maths"
+        maths_dir.mkdir()
+        (maths_dir / "calculus.txt").write_text(
+            "Differential calculus limits derivatives and integrals with applications to volume.",
+            encoding="utf-8",
+        )
+
+        ai_dir = root / "AI"
+        ai_dir.mkdir()
+        (ai_dir / "neural_nets.txt").write_text(
+            "Deep neural networks supervised machine learning backpropagation loss function.",
+            encoding="utf-8",
+        )
+
+        # Quick extract sample
+        sample = quick_extract_sample(maths_dir / "calculus.txt")
+        assert "Differential calculus" in sample
+
+        # Train prototypes from library
+        policy_store = RLCDPolicyStore(root / "policy.json")
+        res = train_prototypes_from_library(root, policy_store=policy_store)
+
+        assert res["status"] == "ok"
+        assert res["categories_trained"] == 2
+        assert res["total_documents"] == 2
+        assert "Maths" in policy_store.centroids
+        assert "AI" in policy_store.centroids
+

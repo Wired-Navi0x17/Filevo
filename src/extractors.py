@@ -258,6 +258,15 @@ def _extract_pptx(path: str) -> tuple[str, list[str], str]:
     return metadata_title, _dedupe_preserving_order(headings), "\n".join(body)
 
 
+def _extract_plain_text(file_path: str) -> tuple[str, list[str], str]:
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        text = f.read()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    title = lines[0] if lines else os.path.splitext(os.path.basename(file_path))[0]
+    headings = [line.lstrip("#").strip() for line in lines if line.startswith("#") and len(line) > 1]
+    return title, headings, text
+
+
 # --------------------------------------------------------------------------- #
 # Public entry point
 # --------------------------------------------------------------------------- #
