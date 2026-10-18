@@ -54,6 +54,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import glob
 import math
 import os
 import queue
@@ -93,6 +94,154 @@ def open_in_dolphin(target: str | Path | None = None) -> None:
             subprocess.Popen(["xdg-open", fallback])
         except Exception:
             pass
+
+
+def _find_zenity_binary() -> str | None:
+    if bin_path := shutil.which("zenity"):
+        return bin_path
+    for p in glob.glob("/nix/store/*-zenity-*/bin/zenity"):
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def _find_kdialog_binary() -> str | None:
+    if bin_path := shutil.which("kdialog"):
+        return bin_path
+    for p in glob.glob("/nix/store/*-kdialog-*/bin/kdialog"):
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def native_choose_folder(
+    parent: Any = None,
+    title: str = "Choose Folder",
+    initial_dir: str | Path | None = None,
+) -> str | None:
+    """Prompt the user to select a folder using native KDE / desktop portal dialogs.
+
+    Returns the selected folder path, or None if the user canceled.
+    """
+    initial = str(Path(initial_dir).expanduser().resolve()) if initial_dir else str(Path.home())
+    if not os.path.exists(initial):
+        initial = str(Path.home())
+
+    # 1. Try kdialog (KDE native)
+    if kdialog_bin := _find_kdialog_binary():
+        try:
+            res = subprocess.run(
+                [kdialog_bin, "--getexistingdirectory", initial, "--title", title],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if res.returncode == 0:
+                selected = res.stdout.strip()
+                if selected and os.path.isdir(selected):
+                    return selected
+            return None
+        except Exception:
+            pass
+
+    # 2. Try zenity with GTK_USE_PORTAL=1 (renders KDE portal dialog on KDE Plasma)
+    if zenity_bin := _find_zenity_binary():
+        try:
+            env = os.environ.copy()
+            env["GTK_USE_PORTAL"] = "1"
+            res = subprocess.run(
+                [
+                    zenity_bin,
+                    "--file-selection",
+                    "--directory",
+                    f"--title={title}",
+                    f"--filename={initial.rstrip('/')}/",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if res.returncode == 0:
+                selected = res.stdout.strip()
+                if selected and os.path.isdir(selected):
+                    return selected
+            return None
+        except Exception:
+            pass
+
+    # 3. Fallback to Tkinter filedialog
+    try:
+        from tkinter import filedialog
+        chosen = filedialog.askdirectory(parent=parent, title=title, initialdir=initial)
+        return chosen if (chosen and os.path.isdir(chosen)) else None
+    except Exception:
+        return None
+
+
+def native_choose_file(
+    parent: Any = None,
+    title: str = "Choose Document",
+    initial_dir: str | Path | None = None,
+    filetypes: list[tuple[str, str]] | None = None,
+) -> str | None:
+    """Prompt the user to select a file using native KDE / desktop portal dialogs.
+
+    Returns the selected file path, or None if the user canceled.
+    """
+    initial = str(Path(initial_dir).expanduser().resolve()) if initial_dir else str(Path.home())
+    if not os.path.exists(initial):
+        initial = str(Path.home())
+
+    # 1. Try kdialog (KDE native)
+    if kdialog_bin := _find_kdialog_binary():
+        try:
+            cmd = [kdialog_bin, "--getopenfilename", initial, "--title", title]
+            if filetypes:
+                filters = [f"{label} ({pat})" for label, pat in filetypes]
+                cmd.append("|".join(filters))
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0:
+                selected = res.stdout.strip()
+                if selected and os.path.isfile(selected):
+                    return selected
+            return None
+        except Exception:
+            pass
+
+    # 2. Try zenity with GTK_USE_PORTAL=1 (renders KDE portal dialog on KDE Plasma)
+    if zenity_bin := _find_zenity_binary():
+        try:
+            env = os.environ.copy()
+            env["GTK_USE_PORTAL"] = "1"
+            cmd = [
+                zenity_bin,
+                "--file-selection",
+                f"--title={title}",
+                f"--filename={initial.rstrip('/')}/",
+            ]
+            if filetypes:
+                for label, pat in filetypes:
+                    cmd.append(f"--file-filter={label} | {pat}")
+            res = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0:
+                selected = res.stdout.strip()
+                if selected and os.path.isfile(selected):
+                    return selected
+            return None
+        except Exception:
+            pass
+
+    # 3. Fallback to Tkinter filedialog
+    try:
+        from tkinter import filedialog
+        kwargs: dict[str, Any] = {"parent": parent, "title": title, "initialdir": initial}
+        if filetypes:
+            kwargs["filetypes"] = filetypes
+        chosen = filedialog.askopenfilename(**kwargs)
+        return chosen if (chosen and os.path.isfile(chosen)) else None
+    except Exception:
+        return None
 
 # --------------------------------------------------------------------------- #
 # Path bootstrap: the app is launched as a script, so make ``src`` importable.
@@ -994,12 +1143,10 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _browse(self, entry: ctk.CTkEntry) -> None:
         initial = entry.get().strip() or str(Path.home())
-        open_in_dolphin(initial)
-        chosen = filedialog.askdirectory(initialdir=initial, parent=self)
+        chosen = native_choose_folder(parent=self, title="Select Directory", initial_dir=initial)
         if chosen:
             entry.delete(0, "end")
             entry.insert(0, chosen)
-            open_in_dolphin(chosen)
 
     def _save(self) -> None:
         changes = {
@@ -1266,7 +1413,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
 
     def _browse(self, entry: ctk.CTkEntry) -> None:
         initial = entry.get().strip() or str(self._home)
-        chosen = filedialog.askdirectory(initialdir=initial, parent=self)
+        chosen = native_choose_folder(parent=self, title="Select Folder", initial_dir=initial)
         if chosen:
             entry.delete(0, "end")
             entry.insert(0, chosen)
@@ -2887,55 +3034,56 @@ class SortwiseApp(ctk.CTk):
     def pick_custom_folder(self) -> None:
         """Allow user to select ANY folder from disk to scan and route."""
         initial = str(Path.home())
-        open_in_dolphin(initial)
-        folder = filedialog.askdirectory(
+        folder = native_choose_folder(
             parent=self,
             title="Choose Folder to Scan & Route",
-            initialdir=initial,
+            initial_dir=initial,
         )
-        if folder:
-            cfg = self._config_store.load()
-            cfg.watch_folder = folder
-            self._config_store.save(cfg)
-            self._crumb_label.configure(text=f"> {folder}")
-            self._set_status(f"Scanning folder: {folder}", tone="ok")
-            open_in_dolphin(folder)
-            self.start_disk_scan([folder])
+        if not folder:
+            return
+
+        cfg = self._config_store.load()
+        cfg.watch_folder = folder
+        self._config_store.save(cfg)
+        self._crumb_label.configure(text=f"> {folder}")
+        self._set_status(f"Scanning folder: {folder}", tone="ok")
+        self.start_disk_scan([folder])
 
     def pick_custom_file(self) -> None:
         """Allow user to pick an individual document from disk to inspect & route."""
         initial = str(Path.home())
-        open_in_dolphin(initial)
-        file_path = filedialog.askopenfilename(
+        file_path = native_choose_file(
             parent=self,
             title="Choose Document to Route",
-            initialdir=initial,
-            filetypes=[("Documents", "*.pdf *.docx *.pptx"), ("All Files", "*.*")],
+            initial_dir=initial,
+            filetypes=[("Documents", "*.pdf *.docx *.pptx *.txt *.md"), ("All Files", "*")],
         )
-        if file_path:
-            p = Path(file_path)
-            rating = rate_document(p.name, get_subject_taxonomy())
-            item = DocItem(
-                key=f"file:{p.resolve()}",
-                label=p.name,
-                kind="file",
-                path=str(p.resolve()),
-                size=p.stat().st_size if p.exists() else 0,
-                file_type=p.suffix.lstrip(".").casefold(),
-                subject=rating.subject,
-                confidence=rating.confidence,
-                entropy=rating.entropy,
-                status=rating.status,
-                ranking=list(rating.ranking),
-                pending=True,
-            )
-            intake_node = next((node for node in self._tree if node.card == "downloads"), None)
-            if intake_node is not None:
-                if not any(c.path == item.path for c in intake_node.children):
-                    intake_node.children.insert(0, item)
-                    intake_node.size += item.size
-            self._select_item(item)
-            self._set_status(f"Inspecting file: {p.name}", tone="ok")
+        if not file_path:
+            return
+
+        p = Path(file_path)
+        rating = rate_document(p.name, get_subject_taxonomy())
+        item = DocItem(
+            key=f"file:{p.resolve()}",
+            label=p.name,
+            kind="file",
+            path=str(p.resolve()),
+            size=p.stat().st_size if p.exists() else 0,
+            file_type=p.suffix.lstrip(".").casefold(),
+            subject=rating.subject,
+            confidence=rating.confidence,
+            entropy=rating.entropy,
+            status=rating.status,
+            ranking=list(rating.ranking),
+            pending=True,
+        )
+        intake_node = next((node for node in self._tree if node.card == "downloads"), None)
+        if intake_node is not None:
+            if not any(c.path == item.path for c in intake_node.children):
+                intake_node.children.insert(0, item)
+                intake_node.size += item.size
+        self._select_item(item)
+        self._set_status(f"Inspecting file: {p.name}", tone="ok")
 
     def _set_op_mode(self, mode: str) -> None:
         self._op_mode = "copy" if mode == "copy" else "move"
