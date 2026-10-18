@@ -2218,9 +2218,21 @@ class SortwiseApp(ctk.CTk):
             self._table_rows.append(hint)
             return
 
-        for index, (item, depth) in enumerate(rows):
+        max_display = 150
+        display_rows = rows[:max_display]
+        for index, (item, depth) in enumerate(display_rows):
             row = self._table_row(item, depth, index)
             self._table_rows.append(row)
+
+        if len(rows) > max_display:
+            more = self._section_label(
+                self._table_body,
+                f"Showing {max_display} of {len(rows)} documents · Use search bar above to filter",
+                font=self._ui_font(self._theme.FONT_HINT),
+                text_color=self._theme.TEXT_MUTED,
+            )
+            more.grid(row=max_display, column=0, columnspan=len(COLUMNS), sticky="w", padx=16, pady=12)
+            self._table_rows.append(more)
 
     def _table_row(self, item: DocItem, depth: int, index: int) -> ctk.CTkFrame:
         selected = self._selected is not None and self._selected.key == item.key
@@ -2309,11 +2321,14 @@ class SortwiseApp(ctk.CTk):
 
         if item.is_folder and item.children:
             arrow.bind("<Button-1>", toggle)
-        for widget in (row, name, size):
+        for widget in (row, name, size, pill, status):
             widget.bind("<Button-1>", select)
-        for widget in (row.winfo_children()):
-            if isinstance(widget, ctk.CTkLabel) and widget is not arrow:
-                widget.bind("<Button-1>", select)
+        for widget in row.winfo_children():
+            if widget is not arrow:
+                try:
+                    widget.bind("<Button-1>", select)
+                except Exception:
+                    pass
 
         def hover(entering: bool, frame: ctk.CTkFrame = row, base: str = bg) -> None:
             if self._selected is not None and self._selected.key == item.key:
@@ -2648,7 +2663,14 @@ class SortwiseApp(ctk.CTk):
 
     # -- background calibration -------------------------------------------- #
     def _calibrate_pending_async(self) -> None:
-        pending = [item for item in _iter_files(self._tree) if item.pending and item.path]
+        # Deep-scan hits already carry a calibrated keyword rating from the
+        # scanner, so we do not re-extract hundreds of PDFs through the neural
+        # classifier; only genuine intake files are refined here.
+        pending = [
+            item
+            for item in _iter_files(self._tree)
+            if item.pending and item.path and not item.scan
+        ]
         if not pending or self._classify_running:
             return
         config = self._config_store.load()
