@@ -764,6 +764,34 @@ async function selectFile(file) {
   await calibrate();
 }
 
+async function inspectCustomFile(filePath) {
+  try {
+    setBusy(true);
+    setStatus(`Inspecting ${filePath}…`, "busy");
+    const data = await api("/api/inspect", {
+      method: "POST",
+      body: { path: filePath },
+    });
+    if (data.files && data.files.length) {
+      const file = data.files[0];
+      // Add to queue if not present
+      if (!state.queue.some(f => f.path === file.path)) {
+        state.queue.unshift(file);
+        rebuildTree();
+      }
+      await selectFile(file);
+      toast(`Inspecting ${file.name}`, "ok");
+    } else {
+      toast("No routable document found at path", "warn");
+    }
+  } catch (err) {
+    toast(`Inspection error: ${err.message}`, "err");
+  } finally {
+    setBusy(false);
+    setStatus("Ready", "online");
+  }
+}
+
 function clearSelection() {
   state.selected = null;
   state.preview = null;
@@ -846,10 +874,11 @@ function renderPreview(result) {
   const changed = rename.value.trim() && rename.value.trim() !== state.selected?.name;
   $("#ins-rename-state").textContent = changed ? "renamed" : "original";
 
-  $("#route-note").textContent = confident
-    ? "Gate passed — safe to route automatically."
-    : "Gate not passed — routing needs your approval.";
-  $("#route-note").className = `note ${confident ? "ok" : "warn"}`;
+  const destPath = result.destination?.planned_path || result.destination?.path || "—";
+  $("#ins-dest-path").textContent = destPath;
+  const opMode = (state.config?.operation_mode || "move").toUpperCase();
+  $("#ins-action-badge").textContent = opMode;
+  $("#ins-action-badge").className = `right tag ${opMode === "COPY" ? "confident" : "review"}`;
 
   updateRouteButton();
   scheduleRender();
@@ -934,19 +963,69 @@ async function suggestRename() {
 }
 
 /* ═════════════════════════════ routing ════════════════════════════════ */
+function promptConfirmTransfer(onConfirm) {
+  const modal = $("#confirm-modal");
+  const actionLabel = (state.config?.operation_mode || "move") === "copy"
+    ? "<b>Copy</b> (keeps original intact)"
+    : "<b>Cut &amp; Move</b> (relocates original file)";
+  $("#confirm-action-label").innerHTML = actionLabel;
+  $("#confirm-source-path").textContent = state.selected?.path || "Batch files";
+  $("#confirm-target-path").textContent = state.preview?.destination?.planned_path || state.preview?.destination?.path || "Auto calculated";
+  $("#confirm-subject").textContent = state.preview?.subject || state.override || "Auto (calibrated)";
+  const conf = state.preview?.confidence ? `${(Number(state.preview.confidence) * 100).toFixed(1)}%` : "—";
+  const ent = state.preview?.entropy ? `${Number(state.preview.entropy).toFixed(2)} bits` : "—";
+  $("#confirm-metrics").textContent = `${conf} / ${ent}`;
+
+  modal.hidden = false;
+  const closeBtn = $("#btn-close-confirm");
+  const cancelBtn = $("#btn-cancel-confirm");
+  const execBtn = $("#btn-execute-confirm");
+
+  const closeDialog = () => {
+    modal.hidden = true;
+    closeBtn.onclick = null;
+    cancelBtn.onclick = null;
+    execBtn.onclick = null;
+  };
+
+  closeBtn.onclick = closeDialog;
+  cancelBtn.onclick = closeDialog;
+  execBtn.onclick = () => {
+    closeDialog();
+    onConfirm();
+  };
+}
+
 async function routeNow() {
   if (state.busy) return;
   const dryRun = $("#chk-dry").checked;
+
+  if (!dryRun) {
+    promptConfirmTransfer(executeTransfer);
+  } else {
+    executeTransfer();
+  }
+}
+
+async function executeTransfer() {
+  const dryRun = $("#chk-dry").checked;
   const batch = Array.from(state.checked);
+  const opMode = state.config?.operation_mode || "move";
   setBusy(true);
   setStatus(dryRun ? "Simulating transfer…" : "Transferring…", "busy");
   try {
     if (batch.length > 1) {
       const result = await api(API.route, {
         method: "POST",
-        body: { paths: batch, move: !dryRun, dry_run: dryRun, subject: state.override },
+        body: {
+          paths: batch,
+          operation: opMode,
+          move: opMode === "move" && !dryRun,
+          dry_run: dryRun,
+          subject: state.override,
+        },
       });
-      toast(`Batch: ${result.moved}/${result.count} moved`, "ok");
+      toast(`Batch: ${result.moved || result.count} files processed`, "ok");
       state.checked.clear();
     } else if (state.selected) {
       const result = await api(API.route, {
@@ -955,14 +1034,15 @@ async function routeNow() {
           path: state.selected.path,
           rename: $("#rename-input").value.trim() || null,
           subject: state.override,
-          move: !dryRun,
+          operation: opMode,
+          move: opMode === "move" && !dryRun,
           dry_run: dryRun,
         },
       });
       renderPreview(result);
-      if (result.moved) {
-        toast(`Transferred → ${result.destination.name}`, "ok");
-        $("#route-note").textContent = `Moved to ${result.destination.path}`;
+      if (result.moved || result.transferred) {
+        toast(`${opMode === "copy" ? "Copied" : "Moved"} → ${result.destination.name}`, "ok");
+        $("#route-note").textContent = `${opMode === "copy" ? "Copied" : "Moved"} to ${result.destination.path}`;
         $("#route-note").className = "note ok";
       } else {
         toast(result.message || "Preview only", "info");
@@ -976,8 +1056,8 @@ async function routeNow() {
   } catch (err) {
     $("#route-note").textContent = err.message;
     $("#route-note").className = "note err";
-    toast(`Route failed: ${err.message}`, "err");
-    setStatus(`Route failed: ${err.message}`, "error");
+    toast(`Transfer failed: ${err.message}`, "err");
+    setStatus(`Transfer failed: ${err.message}`, "error");
   } finally {
     setBusy(false);
   }
@@ -1203,6 +1283,61 @@ function setBusy(flag) {
 
 /* ═════════════════════════════ wiring ════════════════════════════════ */
 function wire() {
+  // Choose Folder and Choose Files handling
+  const folderPicker = $("#folder-picker");
+  const filePicker = $("#file-picker");
+  $("#btn-pick-folder").addEventListener("click", () => {
+    // Prompt directory path or open native input
+    const path = prompt("Enter full folder path to scan & route:", state.config?.watch_folder || "");
+    if (path && path.trim()) {
+      scan(path.trim());
+    } else if (folderPicker) {
+      folderPicker.click();
+    }
+  });
+
+  if (folderPicker) {
+    folderPicker.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files);
+      if (files.length) {
+        toast(`Selected ${files.length} files from folder`, "info");
+      }
+    });
+  }
+
+  $("#btn-pick-files").addEventListener("click", () => {
+    const path = prompt("Enter absolute file path to inspect & route:", "");
+    if (path && path.trim()) {
+      inspectCustomFile(path.trim());
+    } else if (filePicker) {
+      filePicker.click();
+    }
+  });
+
+  // Segmented Copy vs Cut Toggle
+  const segMove = $("#seg-move");
+  const segCopy = $("#seg-copy");
+  const setOpMode = (mode) => {
+    if (!state.config) state.config = {};
+    state.config.operation_mode = mode;
+    if (mode === "copy") {
+      segCopy.classList.add("is-active");
+      segMove.classList.remove("is-active");
+      $("#ins-action-badge").textContent = "COPY";
+      $("#ins-action-badge").className = "right tag confident";
+      toast("Mode: Copy (Original file preserved)", "info");
+    } else {
+      segMove.classList.add("is-active");
+      segCopy.classList.remove("is-active");
+      $("#ins-action-badge").textContent = "CUT / MOVE";
+      $("#ins-action-badge").className = "right tag review";
+      toast("Mode: Cut / Move (File relocated)", "info");
+    }
+  };
+
+  segMove.addEventListener("click", () => setOpMode("move"));
+  segCopy.addEventListener("click", () => setOpMode("copy"));
+
   $("#btn-scan").addEventListener("click", () => scan());
   $("#btn-refresh").addEventListener("click", async () => {
     await Promise.all([loadConfig(), loadSubjects()]);

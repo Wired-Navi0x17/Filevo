@@ -37,15 +37,36 @@
 
     <!-- ═══════════════════════════ toolbar ═════════════════════════════ -->
     <div class="toolbar" role="toolbar" aria-label="Main actions">
-      <button class="btn primary" id="btn-scan" title="Scan the watch directory for routable documents">
+      <input type="file" id="file-picker" multiple style="display:none" />
+      <input type="file" id="folder-picker" webkitdirectory directory style="display:none" />
+
+      <button class="btn" id="btn-pick-folder" title="Pick any custom folder to sort or explore">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        Choose Folder
+      </button>
+
+      <button class="btn" id="btn-pick-files" title="Select one or more individual files">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="1.6"/><polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="12" y1="18" x2="12" y2="12" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="15" x2="15" y2="15" stroke="currentColor" stroke-width="1.6"/></svg>
+        Choose Files
+      </button>
+
+      <span class="tb-sep"></span>
+
+      <button class="btn primary" id="btn-scan" title="Scan the current watch directory for documents">
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 7a2 2 0 0 1 2-2h3.6l1.5 1.9H18a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m14 15 2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        Scan Watch Dir
+        Scan Dir
       </button>
 
       <button class="btn" id="btn-auto-route" title="Classify every incoming file and route the confident ones">
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12h11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="m12 8 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 5v14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity="0.6"/></svg>
         Auto-Route Confident
       </button>
+
+      <!-- Segmented Copy vs Cut Toggle -->
+      <div class="segmented-mode" id="op-mode-toggle" title="Action: Move removes original; Copy keeps original intact">
+        <button class="seg-btn is-active" id="seg-move" data-mode="move">Cut (Move)</button>
+        <button class="seg-btn" id="seg-copy" data-mode="copy">Copy</button>
+      </div>
 
       <button class="btn" id="btn-undo-last" title="Undo the most recent transfer">
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M9 7 5 11l4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 11h9a5 5 0 0 1 0 10h-2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -211,15 +232,22 @@
               </div>
             </div>
 
-            <!-- route -->
+            <!-- route & preview -->
             <div class="card">
-              <div class="card-head">Route</div>
+              <div class="card-head">
+                <span>Target Action</span>
+                <span class="right" id="ins-action-badge">MOVE</span>
+              </div>
               <div class="card-body">
-                <div class="actions">
+                <div class="target-path-preview" id="ins-target-preview-box">
+                  <span class="k">Destination:</span>
+                  <span class="v mono" id="ins-dest-path">—</span>
+                </div>
+                <div class="actions" style="margin-top:10px">
                   <label class="check"><input type="checkbox" id="chk-dry" /><span>Dry run</span></label>
                   <span class="grow"></span>
                   <button class="btn small" id="btn-recalibrate">Re-calibrate</button>
-                  <button class="btn primary" id="btn-route" disabled>Route File</button>
+                  <button class="btn primary" id="btn-route" disabled>Confirm Transfer</button>
                 </div>
                 <p class="note" id="route-note" style="margin-top:10px"></p>
               </div>
@@ -355,6 +383,53 @@
         <span class="spacer"></span>
         <button class="btn ghost" id="btn-cancel-config">Cancel</button>
         <button class="btn primary" id="btn-save-config">Save Settings</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ confirm transfer modal ═══════════════════════════ -->
+  <div class="modal-backdrop" id="confirm-modal" hidden>
+    <div class="modal confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+      <header class="modal-head">
+        <span class="head-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="none" stroke="#3b82f6" stroke-width="1.8"/><path d="m9 12 2 2 4-4" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round"/></svg>
+        </span>
+        <h2 id="confirm-modal-title">Confirm Document Transfer</h2>
+        <button class="btn ghost small" id="btn-close-confirm" aria-label="Close">✕</button>
+      </header>
+
+      <div class="modal-body">
+        <div class="confirm-summary">
+          <p>Please review the automated routing decision before executing the transfer:</p>
+          <div class="confirm-diff-card">
+            <div class="diff-row">
+              <span class="diff-k">Action:</span>
+              <span class="diff-v" id="confirm-action-label"><b>Cut &amp; Move</b> (removes source file)</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-k">Source:</span>
+              <span class="diff-v mono" id="confirm-source-path">—</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-k">Destination:</span>
+              <span class="diff-v mono" id="confirm-target-path" style="color:#60a5fa">—</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-k">Subject:</span>
+              <span class="diff-v" id="confirm-subject">—</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-k">Confidence / Entropy:</span>
+              <span class="diff-v" id="confirm-metrics">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="modal-foot">
+        <button class="btn ghost" id="btn-cancel-confirm">Cancel</button>
+        <span class="spacer"></span>
+        <button class="btn primary" id="btn-execute-confirm">Proceed &amp; Execute</button>
       </footer>
     </div>
   </div>

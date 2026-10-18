@@ -57,7 +57,7 @@ from .calibrator import (
     CalibratedDecision,
 )
 from .extractors import DocumentExtractionError, ExtractedDoc, extract_document
-from .taxonomy import get_subject_taxonomy, subject_labels
+from .taxonomy import discover_target_taxonomy, get_subject_taxonomy, subject_labels
 
 __all__ = [
     "APP_NAME",
@@ -178,6 +178,7 @@ class SortwiseConfig:
     confidence_threshold: float = CONFIDENCE_THRESHOLD
     entropy_threshold: float = ENTROPY_THRESHOLD
     auto_move: bool = False
+    operation_mode: str = "move"  # "move" or "copy"
     recursive: bool = False
     extensions: list[str] = field(default_factory=lambda: list(SUPPORTED_EXTENSIONS))
     model_name: str = "all-MiniLM-L6-v2"
@@ -197,6 +198,7 @@ class SortwiseConfig:
             "confidence_threshold",
             "entropy_threshold",
             "auto_move",
+            "operation_mode",
             "recursive",
             "extensions",
             "model_name",
@@ -231,6 +233,8 @@ class SortwiseConfig:
         )
 
         self.auto_move = bool(self.auto_move)
+        mode = str(self.operation_mode or "move").casefold()
+        self.operation_mode = "copy" if mode == "copy" else "move"
         self.recursive = bool(self.recursive)
         self.model_name = str(self.model_name or "all-MiniLM-L6-v2")
         self.rename_template = str(self.rename_template or "{title}")
@@ -246,6 +250,7 @@ class SortwiseConfig:
             "confidence_threshold": self.confidence_threshold,
             "entropy_threshold": self.entropy_threshold,
             "auto_move": self.auto_move,
+            "operation_mode": self.operation_mode,
             "recursive": self.recursive,
             "extensions": list(self.extensions),
             "model_name": self.model_name,
@@ -413,11 +418,12 @@ class SortwiseService:
         self._model_lock = threading.Lock()
         self.started_at = time.time()
 
-    # -- classifier -------------------------------------------------------- #
-    @staticmethod
-    def _default_factory(config: SortwiseConfig) -> CalibratedClassifier:
+    def _default_factory(self, config: SortwiseConfig) -> CalibratedClassifier:
+        taxonomy = self.current_taxonomy(config)
         return CalibratedClassifier(
-            model_name=config.model_name, temperature=config.temperature
+            model_name=config.model_name,
+            temperature=config.temperature,
+            taxonomy=taxonomy,
         )
 
     @property
@@ -429,7 +435,9 @@ class SortwiseService:
 
     def classifier(self, config: SortwiseConfig) -> Any:
         """Return the classifier, building / rebuilding it when settings change."""
-        signature = (config.model_name, float(config.temperature))
+        taxonomy = self.current_taxonomy(config)
+        tax_keys = tuple(sorted(taxonomy.keys()))
+        signature = (config.model_name, float(config.temperature), tax_keys)
         with self._model_lock:
             if self._classifier is None or (
                 self._classifier_signature is not None
@@ -441,8 +449,12 @@ class SortwiseService:
             return self._classifier
 
     # -- taxonomy ---------------------------------------------------------- #
+    def current_taxonomy(self, config: SortwiseConfig) -> dict[str, dict]:
+        return discover_target_taxonomy(config.target_root)
+
     def subject_folder_name(self, label: str, config: SortwiseConfig) -> str:
-        entry = get_subject_taxonomy().get(label, {})
+        taxonomy = self.current_taxonomy(config)
+        entry = taxonomy.get(label, {})
         mapping = {
             "label": label,
             "code": str(entry.get("code", "") or ""),
@@ -459,7 +471,7 @@ class SortwiseService:
         return expand_path(config.target_root) / self.subject_folder_name(label, config)
 
     def subjects(self, config: SortwiseConfig) -> list[dict[str, Any]]:
-        taxonomy = get_subject_taxonomy()
+        taxonomy = self.current_taxonomy(config)
         subjects: list[dict[str, Any]] = []
         for label, entry in taxonomy.items():
             folder = self.destination_folder(label, config)
@@ -656,21 +668,30 @@ class SortwiseService:
         )
         target = unique_path(dest_dir, renamed)
 
-        should_move = bool(move) if move is not None else bool(config.auto_move)
-        perform = should_move and not dry_run
+        should_move = bool(move) if move is not None else (config.operation_mode != "copy" and bool(config.auto_move))
+        operation = "copy" if (not should_move and config.operation_mode == "copy") else "move"
+        # If caller explicitly requested operation or move
+        if move is False and config.operation_mode == "copy":
+            operation = "copy"
+        perform = not dry_run and (should_move or config.auto_move)
 
-        moved = False
+        transferred = False
         message = ""
         if perform:
             try:
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source), str(target))
-                moved = True
-                message = f"Moved to {target.name}"
+                if operation == "copy":
+                    shutil.copy2(str(source), str(target))
+                    transferred = True
+                    message = f"Copied to {target.name}"
+                else:
+                    shutil.move(str(source), str(target))
+                    transferred = True
+                    message = f"Moved to {target.name}"
             except OSError as exc:
-                raise SortwiseError(f"could not move file: {exc}", 500) from exc
+                raise SortwiseError(f"could not transfer file: {exc}", 500) from exc
         else:
-            message = "Preview only - nothing was moved" if dry_run else "Left in place"
+            message = "Preview only - nothing was transferred" if dry_run else "Left in place"
 
         result: dict[str, Any] = {
             "source": {
@@ -703,17 +724,19 @@ class SortwiseService:
             "renamed_from": original_name if renamed != original_name else None,
             "suggested_rename": suggested,
             "collision": collision,
-            "moved": moved,
+            "moved": transferred,
+            "transferred": transferred,
+            "operation": operation,
             "dry_run": dry_run,
             "auto_move": bool(config.auto_move),
             "message": message,
             "telemetry_error": telemetry_error,
         }
 
-        if moved:
+        if transferred:
             entry = self.ledger.add(
                 {
-                    "action": "move",
+                    "action": operation,
                     "source": str(source),
                     "destination": str(target),
                     "subject": chosen,
@@ -773,18 +796,45 @@ class SortwiseService:
         entry = self.ledger.get(entry_id)
         if entry is None:
             raise SortwiseError(f"no ledger entry with id '{entry_id}'", 404)
-        if entry.get("action") != "move":
-            raise SortwiseError("only move entries can be undone", 400)
+        action = entry.get("action")
+        if action not in ("move", "copy"):
+            raise SortwiseError("only move or copy entries can be undone", 400)
         if entry.get("undone"):
             raise SortwiseError("this transfer was already undone", 409)
 
-        source = expand_path(entry.get("source", ""))
         destination = expand_path(entry.get("destination") or "")
         if not destination.exists():
             raise SortwiseError(
-                f"the moved file is gone: {destination}", 409
+                f"the transferred file is gone: {destination}", 409
             )
 
+        if action == "copy":
+            try:
+                destination.unlink()
+            except OSError as exc:
+                raise SortwiseError(f"could not remove copied file: {exc}", 500) from exc
+            self.ledger.update(entry_id, undone=True, undo_of=entry_id)
+            undo_entry = self.ledger.add(
+                {
+                    "action": "undo",
+                    "source": str(destination),
+                    "destination": None,
+                    "subject": entry.get("subject", ""),
+                    "confidence": entry.get("confidence", 0.0),
+                    "entropy": entry.get("entropy", 0.0),
+                    "status": entry.get("status", STATUS_AMBIGUOUS),
+                    "undo_of": entry_id,
+                    "message": f"Removed copy {destination.name}",
+                }
+            )
+            return {
+                "entry_id": entry_id,
+                "removed_copy": str(destination),
+                "undo_entry_id": undo_entry["id"],
+                "message": f"Removed copy {destination.name}",
+            }
+
+        source = expand_path(entry.get("source", ""))
         source.parent.mkdir(parents=True, exist_ok=True)
         restore = source if not source.exists() else unique_path(source.parent, source.name)
         try:
@@ -862,6 +912,7 @@ class ConfigUpdate(BaseModel):
     confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     entropy_threshold: float | None = Field(default=None, ge=0.0)
     auto_move: bool | None = None
+    operation_mode: str | None = None
     recursive: bool | None = None
     extensions: list[str] | None = None
     model_name: str | None = None
@@ -883,12 +934,14 @@ class RouteRequest(BaseModel):
     rename: str | None = None
     subject: str | None = None
     move: bool | None = None
+    operation: str | None = None  # "copy" | "move"
     dry_run: bool = False
 
 
 class BatchRouteRequest(BaseModel):
     paths: list[str] = Field(default_factory=list)
     move: bool | None = None
+    operation: str | None = None
     dry_run: bool = False
     subject: str | None = None
 
@@ -992,6 +1045,32 @@ def create_app(
     def scan_post(request: ScanRequest = Body(default_factory=ScanRequest)) -> dict[str, Any]:
         return run(service.scan, config_store.load(), request.path)
 
+    @app.post("/api/inspect")
+    def inspect_file(request: ScanRequest) -> dict[str, Any]:
+        """Directly inspect one or multiple individual files without walking a folder."""
+        config = config_store.load()
+        if not request.path:
+            raise HTTPException(status_code=400, detail="'path' is required")
+        source = expand_path(request.path)
+        if not source.exists():
+            raise HTTPException(status_code=404, detail=f"file not found: {source}")
+        if source.is_dir():
+            return run(service.scan, config, str(source))
+        stat = source.stat()
+        file_info = {
+            "path": str(source),
+            "name": source.name,
+            "file_type": source.suffix.lstrip(".").casefold(),
+            "size": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
+            "modified_ts": stat.st_mtime,
+        }
+        return {
+            "folder": str(source.parent),
+            "count": 1,
+            "files": [file_info],
+        }
+
     # -- rename ------------------------------------------------------------ #
     @app.post("/api/rename/suggest")
     def rename_suggest(request: RenameSuggestRequest) -> dict[str, Any]:
@@ -1015,11 +1094,17 @@ def create_app(
     @app.post("/api/route")
     def route(request: RouteRequest) -> Any:
         config = config_store.load()
+        move_param = request.move
+        if request.operation == "copy":
+            move_param = False
+        elif request.operation == "move":
+            move_param = True
+
         if request.paths:
             return service.route_batch(
                 paths=request.paths,
                 config=config,
-                move=request.move,
+                move=move_param,
                 dry_run=request.dry_run,
                 subject=request.subject,
             )
@@ -1031,7 +1116,7 @@ def create_app(
             config=config,
             rename=request.rename,
             subject=request.subject,
-            move=request.move,
+            move=move_param,
             dry_run=request.dry_run,
         )
 
@@ -1039,10 +1124,15 @@ def create_app(
     def route_batch(request: BatchRouteRequest) -> dict[str, Any]:
         if not request.paths:
             raise HTTPException(status_code=400, detail="'paths' must not be empty")
+        move_param = request.move
+        if request.operation == "copy":
+            move_param = False
+        elif request.operation == "move":
+            move_param = True
         return service.route_batch(
             paths=request.paths,
             config=config_store.load(),
-            move=request.move,
+            move=move_param,
             dry_run=request.dry_run,
             subject=request.subject,
         )

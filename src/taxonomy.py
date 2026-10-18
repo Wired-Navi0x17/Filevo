@@ -264,15 +264,61 @@ SUBJECT_TAXONOMY: dict[str, dict] = {
 }
 
 
-def get_subject_taxonomy() -> dict[str, dict]:
-    """Return a deep copy of the subject taxonomy.
-
-    A copy is returned so callers can freely annotate or mutate entries without
-    corrupting the module-level prototype data.
-    """
+def get_subject_taxonomy(custom_taxonomy: dict[str, dict] | None = None) -> dict[str, dict]:
+    """Return a deep copy of the subject taxonomy or user-provided taxonomy."""
+    if custom_taxonomy:
+        return copy.deepcopy(custom_taxonomy)
     return copy.deepcopy(SUBJECT_TAXONOMY)
 
 
-def subject_labels() -> list[str]:
-    """Return the ordered list of subject labels (the taxonomy keys)."""
+def subject_labels(custom_taxonomy: dict[str, dict] | None = None) -> list[str]:
+    """Return the ordered list of subject labels."""
+    if custom_taxonomy:
+        return list(custom_taxonomy.keys())
     return list(SUBJECT_TAXONOMY.keys())
+
+
+def discover_target_taxonomy(target_root_path: str) -> dict[str, dict]:
+    """Dynamically build a taxonomy from subfolders existing in target_root.
+    
+    If subfolders match known taxonomy keys or codes, merge their rich keywords.
+    Otherwise, derive keywords and prototypes from the folder name.
+    """
+    from pathlib import Path
+    root = Path(target_root_path).expanduser().resolve()
+    if not root.is_dir():
+        return get_subject_taxonomy()
+
+    subdirs = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    if not subdirs:
+        return get_subject_taxonomy()
+
+    discovered: dict[str, dict] = {}
+    known = get_subject_taxonomy()
+
+    for d in sorted(subdirs, key=lambda p: p.name.lower()):
+        folder_name = d.name
+        # Match with known taxonomy if possible
+        matched_key = None
+        for k, info in known.items():
+            if folder_name.lower() == k.lower() or folder_name.lower() == info.get("name", "").lower() or folder_name.lower() == info.get("code", "").lower():
+                matched_key = k
+                break
+
+        if matched_key:
+            entry = copy.deepcopy(known[matched_key])
+            discovered[folder_name] = entry
+        else:
+            # Generate prototype profile from folder name
+            clean_name = folder_name.replace("-", " ").replace("_", " ")
+            parts = [w for w in clean_name.split() if w.strip()]
+            keywords = [clean_name.lower()] + [p.lower() for p in parts if len(p) > 2]
+            discovered[folder_name] = {
+                "code": parts[0] if parts and any(c.isdigit() for c in parts[0]) else "",
+                "name": clean_name,
+                "keywords": keywords,
+                "syllabus": f"Documents, coursework, materials and references concerning {clean_name}.",
+            }
+
+    return discovered if discovered else get_subject_taxonomy()
+

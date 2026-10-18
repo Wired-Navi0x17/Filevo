@@ -875,6 +875,97 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius
   .telemetry { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+/* ==========================================================================
+   Segmented Copy / Cut Mode Toggle & Confirm Dialog
+   ========================================================================== */
+.segmented-mode {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+.seg-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.seg-btn:hover {
+  color: var(--text);
+}
+.seg-btn.is-active {
+  background: var(--elevated-2);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+.target-path-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: 11.5px;
+}
+.target-path-preview .k {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+.target-path-preview .v {
+  word-break: break-all;
+  color: #93c5fd;
+}
+
+.confirm-dialog {
+  max-width: 580px;
+}
+.confirm-summary p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.confirm-diff-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.diff-row {
+  display: flex;
+  gap: 12px;
+  font-size: 12.5px;
+  align-items: baseline;
+}
+.diff-k {
+  flex: 0 0 130px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.diff-v {
+  flex: 1 1 auto;
+  word-break: break-all;
+  color: var(--text);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }

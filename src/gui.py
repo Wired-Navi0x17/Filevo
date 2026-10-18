@@ -168,6 +168,7 @@ def open_browser_window(url: str) -> None:
         "microsoft-edge-stable",
         "vivaldi",
     )
+    # Try Chromium family first with --app
     for name in browser_candidates:
         binary = shutil.which(name)
         if not binary:
@@ -178,21 +179,54 @@ def open_browser_window(url: str) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            print(f"[sortwise] opened {name} in app mode: {url}", file=sys.stderr)
+            print(f"[sortwise] opened {name} in dedicated app window: {url}", file=sys.stderr)
             try:
                 process.wait()
             except KeyboardInterrupt:
                 pass
             return
-        except OSError as exc:  # pragma: no cover - launch race
+        except OSError as exc:
             print(f"[sortwise] could not launch {name}: {exc}", file=sys.stderr)
 
-    print(
-        "[sortwise] Tip: install a native backend for a borderless window, e.g.\n"
-        "[sortwise]      uv add \"pywebview[gtk]\"   (needs WebKitGTK)  or\n"
-        "[sortwise]      uv add qtpy PyQt5          (needs Qt)",
-        file=sys.stderr,
-    )
+    # Dedicated Firefox local app window with hidden chrome
+    ff_bin = shutil.which("firefox")
+    if ff_bin:
+        profile_dir = Path.home() / ".cache" / "sortwise" / "firefox_profile"
+        chrome_dir = profile_dir / "chrome"
+        chrome_dir.mkdir(parents=True, exist_ok=True)
+        css_file = chrome_dir / "userChrome.css"
+        css_file.write_text(
+            "#TabsToolbar { visibility: collapse !important; }\n"
+            "#nav-bar { visibility: collapse !important; }\n"
+            "#PersonalToolbar { visibility: collapse !important; }\n",
+            encoding="utf-8"
+        )
+        prefs_file = profile_dir / "user.js"
+        prefs_file.write_text(
+            'user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);\n'
+            'user_pref("browser.shell.checkDefaultBrowser", false);\n'
+            'user_pref("browser.tabs.warnOnClose", false);\n',
+            encoding="utf-8"
+        )
+        try:
+            cmd = [
+                ff_bin,
+                "--profile", str(profile_dir),
+                "--new-instance",
+                "--class", "Sortwise",
+                "--name", "Sortwise",
+                url
+            ]
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"[sortwise] opened dedicated desktop window: {url}", file=sys.stderr)
+            try:
+                process.wait()
+            except KeyboardInterrupt:
+                pass
+            return
+        except OSError as exc:
+            print(f"[sortwise] could not launch firefox app window: {exc}", file=sys.stderr)
+
     print(f"[sortwise] UI available at {url}", file=sys.stderr)
     webbrowser.open(url)
     try:
