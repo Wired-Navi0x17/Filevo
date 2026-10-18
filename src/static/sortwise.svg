@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sortwise">
+  <!-- matte graphite plate -->
+  <rect x="2" y="2" width="124" height="124" rx="26" fill="#181a1f"/>
+  <rect x="2.75" y="2.75" width="122.5" height="122.5" rx="25.25"
+        fill="none" stroke="#2c2e36" stroke-width="1.5"/>
+
+  <!-- folder silhouette -->
+  <path d="M26 48a7 7 0 0 1 7-7h20l7 8h34a7 7 0 0 1 7 7v28a7 7 0 0 1-7 7H33a7 7 0 0 1-7-7z"
+        fill="none" stroke="#3b82f6" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- routed items -->
+  <rect x="46" y="60" width="30" height="20" rx="4" fill="#3b82f6" opacity="0.85"/>
+  <path d="M51 66h20M51 72h13" stroke="#121316" stroke-width="2.4" stroke-linecap="round"/>
+
+  <!-- throughput arrow -->
+  <path d="M84 70h14m0 0-5-5m5 5-5 5" fill="none" stroke="#a3a9b4"
+        stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- destination node -->
+  <circle cx="103" cy="70" r="4" fill="#10b981"/>
+</svg>

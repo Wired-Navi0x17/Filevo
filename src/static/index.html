@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>SORTWISE — Calibrated Document Router</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ═══════════════════════════ title bar ═══════════════════════════ -->
+    <header class="titlebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="20" height="20">
+            <path d="M3 9.5A2.5 2.5 0 0 1 5.5 7h5.2l2.1 2.6h13.7A2.5 2.5 0 0 1 29 12.1v10.4A2.5 2.5 0 0 1 26.5 25h-21A2.5 2.5 0 0 1 3 22.5z"
+                  fill="none" stroke="#3b82f6" stroke-width="1.7" stroke-linejoin="round"/>
+            <path d="M11 15.5h10M14 19.5h7" stroke="#a3a9b4" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="brand-text">
+          <h1>SORTWISE</h1>
+          <p>Calibrated Document Router</p>
+        </div>
+      </div>
+
+      <div class="titlebar-status">
+        <span class="pill is-idle" id="pill-connection"><i class="dot"></i><span id="pill-connection-text">CONNECTING</span></span>
+        <span class="pill" id="pill-model">MODEL&nbsp;····</span>
+        <span class="pill" id="pill-queue">QUEUE&nbsp;0</span>
+        <span class="pill" id="pill-ledger">LEDGER&nbsp;0</span>
+        <span class="pill" id="pill-uptime">UP&nbsp;0s</span>
+      </div>
+    </header>
+
+    <!-- ═══════════════════════════ toolbar ═════════════════════════════ -->
+    <div class="toolbar" role="toolbar" aria-label="Main actions">
+      <button class="btn primary" id="btn-scan" title="Scan the watch directory for routable documents">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 7a2 2 0 0 1 2-2h3.6l1.5 1.9H18a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="13" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m14 15 2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        Scan Watch Dir
+      </button>
+
+      <button class="btn" id="btn-auto-route" title="Classify every incoming file and route the confident ones">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12h11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="m12 8 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 5v14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity="0.6"/></svg>
+        Auto-Route Confident
+      </button>
+
+      <button class="btn" id="btn-undo-last" title="Undo the most recent transfer">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M9 7 5 11l4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 11h9a5 5 0 0 1 0 10h-2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Undo Last
+      </button>
+
+      <span class="tb-sep"></span>
+
+      <button class="btn ghost" id="btn-refresh" title="Reload scan, destinations and ledger">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2-4.9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M19 4v4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Refresh
+      </button>
+
+      <span class="spacer"></span>
+
+      <button class="btn ghost" id="btn-settings" title="Router settings">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4 6 18M18 18l-1.6-1.6M7.6 7.6 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        Settings
+      </button>
+    </div>
+
+    <!-- ══════════════════════════ breadcrumbs ══════════════════════════ -->
+    <nav class="breadcrumbs" id="breadcrumbs" aria-label="Disk map path"></nav>
+
+    <!-- ══════════════════════════ split workspace ══════════════════════ -->
+    <main class="workspace">
+      <!-- left: radial disk map -->
+      <section class="viz-pane" aria-label="Radial disk map">
+        <div class="pane-head">
+          <h2>Disk Map</h2>
+          <span class="head-meta" id="viz-meta">—</span>
+        </div>
+
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="filelight-canvas"></canvas>
+          <div class="canvas-overlay" id="canvas-overlay" hidden>
+            <div class="canvas-hint" id="canvas-hint">
+              No documents found. Press <b>Scan Watch Dir</b> to build the map.
+            </div>
+          </div>
+        </div>
+
+        <div class="telemetry" id="telemetry-readout" aria-live="polite">
+          <div class="cell">
+            <span class="k">Focus</span>
+            <span class="v" id="tel-name">—</span>
+          </div>
+          <div class="cell">
+            <span class="k">Size</span>
+            <span class="v" id="tel-size">—</span>
+          </div>
+          <div class="cell">
+            <span class="k">Calibrated Subject</span>
+            <span class="v accent" id="tel-subject">—</span>
+          </div>
+          <div class="cell">
+            <span class="k">Confidence</span>
+            <span class="v" id="tel-confidence">—</span>
+          </div>
+          <div class="cell">
+            <span class="k">Entropy</span>
+            <span class="v" id="tel-entropy">—</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- right: inspector -->
+      <aside class="inspector-pane" aria-label="Document inspector">
+        <div class="pane-head">
+          <h2>Inspector</h2>
+          <span class="head-meta" id="inspector-head-meta">no selection</span>
+        </div>
+
+        <div class="inspector-body">
+          <div class="inspector-empty" id="inspector-empty">
+            <svg class="glyph" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true">
+              <path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+              <path d="M14 3v4h4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+            Select a document in the disk map or incoming list to inspect, rename and route it.
+          </div>
+
+          <div id="inspector-body-fields" class="hidden">
+            <!-- source document -->
+            <div class="card">
+              <div class="card-head">Source Document</div>
+              <div class="card-body">
+                <p class="file-name" id="ins-name">—</p>
+                <p class="file-path" id="ins-path">—</p>
+                <div class="file-meta">
+                  <span class="type-tag" id="ins-type" data-ext="">—</span>
+                  <span class="m" id="ins-size">—</span>
+                  <span class="m" id="ins-modified">—</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- rename -->
+            <div class="card">
+              <div class="card-head">
+                Rename In Flight
+                <span class="right" id="ins-rename-state">—</span>
+              </div>
+              <div class="card-body">
+                <div class="field">
+                  <div class="rename-row">
+                    <input id="rename-input" class="input" type="text" spellcheck="false"
+                           autocomplete="off" placeholder="suggested-filename.pdf" />
+                    <button class="btn small" id="btn-suggest" title="Derive a clean name from the document title">Suggest</button>
+                  </div>
+                  <p class="hint" id="rename-hint">Smart suggestion appears after calibration.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- calibration -->
+            <div class="card">
+              <div class="card-head">
+                Calibration
+                <span class="right" id="ins-status-pill">—</span>
+              </div>
+              <div class="card-body">
+                <div class="field">
+                  <label for="override-select">Subject match</label>
+                  <select class="input" id="override-select">
+                    <option value="">Auto (calibrated)</option>
+                  </select>
+                </div>
+
+                <div class="metric" style="margin-top:12px">
+                  <div class="metric-head">
+                    <span class="mlabel">Confidence</span>
+                    <span class="mvalue" id="ins-conf-value">—</span>
+                  </div>
+                  <div class="gauge">
+                    <div class="gauge-fill" id="ins-conf-bar"></div>
+                    <div class="gauge-gate" id="ins-conf-gate"></div>
+                  </div>
+                </div>
+
+                <div class="metric">
+                  <div class="metric-head">
+                    <span class="mlabel">Entropy</span>
+                    <span class="mvalue" id="ins-ent-value">—</span>
+                  </div>
+                  <div class="gauge">
+                    <div class="gauge-fill" id="ins-ent-bar"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- distribution -->
+            <div class="card">
+              <div class="card-head">
+                Distribution
+                <span class="right" id="ins-dist-title">—</span>
+              </div>
+              <div class="card-body">
+                <div class="distribution" id="distribution-list">
+                  <p class="note">Calibrate a document to see the distribution.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- route -->
+            <div class="card">
+              <div class="card-head">Route</div>
+              <div class="card-body">
+                <div class="actions">
+                  <label class="check"><input type="checkbox" id="chk-dry" /><span>Dry run</span></label>
+                  <span class="grow"></span>
+                  <button class="btn small" id="btn-recalibrate">Re-calibrate</button>
+                  <button class="btn primary" id="btn-route" disabled>Route File</button>
+                </div>
+                <p class="note" id="route-note" style="margin-top:10px"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ══════════════════════════ activity ledger ═══════════════════════ -->
+    <section class="ledger-pane" aria-label="Activity ledger">
+      <div class="pane-head">
+        <h2>Activity Ledger</h2>
+        <span class="head-meta" id="ledger-count">0 transfers</span>
+        <span class="grow" style="flex:1 1 auto"></span>
+        <button class="btn ghost small" id="btn-clear-ledger" title="Delete the ledger history">Clear</button>
+      </div>
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead>
+            <tr>
+              <th class="nowrap">Time</th>
+              <th>Transfer</th>
+              <th class="nowrap">Subject</th>
+              <th class="nowrap">Confidence</th>
+              <th class="nowrap">Status</th>
+              <th class="nowrap" style="text-align:right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="ledger-body">
+            <tr><td class="empty-cell" colspan="6">No transfers recorded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════ status bar ══════════════════════════ -->
+    <footer class="statusbar">
+      <span class="sb-item" id="status-connection"><i class="dot"></i><span id="status-connection-text">connecting…</span></span>
+      <span class="sb-item sb-msg" id="status-message">Ready</span>
+      <span class="spacer"></span>
+      <span class="sb-item" id="status-watch" title="Watch folder">watch: —</span>
+      <span class="sb-item" id="status-target" title="Target root">target: —</span>
+      <span class="sb-item" id="status-endpoint">127.0.0.1:8765</span>
+    </footer>
+  </div>
+
+  <!-- ═══════════════════════════ settings modal ═══════════════════════════ -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <header class="modal-head">
+        <span class="head-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4 6 18M18 18l-1.6-1.6M7.6 7.6 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span>
+        <h2 id="modal-title">Router Settings</h2>
+        <button class="btn ghost small" id="btn-close-modal" aria-label="Close">✕</button>
+      </header>
+
+      <form class="modal-body" id="config-form">
+        <div class="field">
+          <label for="cfg-watch">Watch directory</label>
+          <input id="cfg-watch" class="input" type="text" spellcheck="false" />
+          <p class="hint">Documents dropped here appear in the incoming queue.</p>
+        </div>
+
+        <div class="field">
+          <label for="cfg-target">Target root</label>
+          <input id="cfg-target" class="input" type="text" spellcheck="false" />
+          <p class="hint">Each subject becomes a folder here: <span class="mono" id="cfg-target-preview">…</span></p>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label for="cfg-conf">Confidence threshold&nbsp; <span class="mono" id="cfg-conf-val">0.70</span></label>
+            <input id="cfg-conf" type="range" min="0.05" max="0.99" step="0.01" />
+            <p class="hint">Below this the file is flagged for review.</p>
+          </div>
+          <div class="field">
+            <label for="cfg-ent">Entropy ceiling&nbsp; <span class="mono" id="cfg-ent-val">1.50</span></label>
+            <input id="cfg-ent" type="range" min="0" max="3" step="0.05" />
+            <p class="hint">Higher entropy means a flatter distribution.</p>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="cfg-folder-template">Subject folder pattern</label>
+          <input id="cfg-folder-template" class="input" type="text" spellcheck="false" />
+          <p class="hint">Placeholders: <code>{label}</code> <code>{code}</code> <code>{name}</code> <code>{date}</code></p>
+        </div>
+
+        <div class="field">
+          <label for="cfg-rename-template">Rename pattern</label>
+          <input id="cfg-rename-template" class="input" type="text" spellcheck="false" />
+          <p class="hint">Placeholders: <code>{title}</code> <code>{stem}</code> <code>{code}</code> <code>{subject}</code> <code>{date}</code></p>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label for="cfg-model">Embedding model</label>
+            <input id="cfg-model" class="input" type="text" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="cfg-temp">Softmax temperature&nbsp; <span class="mono" id="cfg-temp-val">0.15</span></label>
+            <input id="cfg-temp" type="range" min="0.02" max="1" step="0.01" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>File types</label>
+          <div class="chips" id="cfg-extensions">
+            <label class="chip"><input type="checkbox" value="pdf" /><span>.pdf</span></label>
+            <label class="chip"><input type="checkbox" value="docx" /><span>.docx</span></label>
+            <label class="chip"><input type="checkbox" value="pptx" /><span>.pptx</span></label>
+          </div>
+        </div>
+
+        <div class="toggle-group" style="display:flex;flex-direction:column;gap:12px">
+          <label class="toggle">
+            <input type="checkbox" id="cfg-auto" />
+            <span class="track"><span class="thumb"></span></span>
+            <span class="toggle-text"><b>Auto-move</b><small>Move straight in when the gate passes; otherwise wait for approval.</small></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="cfg-recursive" />
+            <span class="track"><span class="thumb"></span></span>
+            <span class="toggle-text"><b>Recursive scan</b><small>Also walk sub-folders of the watch directory.</small></span>
+          </label>
+        </div>
+      </form>
+
+      <footer class="modal-foot">
+        <button class="btn ghost" id="btn-reset-config">Reset Defaults</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="btn-cancel-config">Cancel</button>
+        <button class="btn primary" id="btn-save-config">Save Settings</button>
+      </footer>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="assertive"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
