@@ -118,6 +118,8 @@ class CalibratedDecision:
     entropy: float
     status: str
     ranking: list[tuple[str, float]]
+    agreement: float = 1.0
+    disagreement: float = 0.0
 
 
 # --------------------------------------------------------------------------- #

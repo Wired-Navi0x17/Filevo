@@ -716,6 +716,8 @@ class DocItem:
     scan: bool = False                   # discovered by the disk scanner
     selected: bool = False               # ticked in the bulk-action toolbar
     ranking: list[tuple[str, float]] = field(default_factory=list)
+    agreement: float | None = None
+    disagreement: float | None = None
     children: list["DocItem"] = field(default_factory=list)
 
     @property
@@ -773,7 +775,7 @@ def build_document_tree(
     Returns ``(top_level_items, stats)``.  Every folder is optional: a missing
     or unreadable directory simply yields an empty branch instead of raising.
     """
-    taxonomy = get_subject_taxonomy()
+    taxonomy = service.current_taxonomy(config)
     flat = _flat(config)
 
     filed: dict[str, dict[str, Any]] = {}
@@ -808,6 +810,8 @@ def build_document_tree(
             item.entropy = rating.entropy
             item.status = rating.status
             item.ranking = list(rating.ranking)
+            item.agreement = getattr(rating, "agreement", 1.0)
+            item.disagreement = getattr(rating, "disagreement", 0.0)
         else:
             item.subject = subject
             item.confidence = 0.94
@@ -851,10 +855,10 @@ def build_document_tree(
     downloads.size = sum(child.size for child in downloads.children)
     top.append(downloads)
 
-    # Subjects -- one folder per taxonomy course.
+    # Subjects -- one folder per dynamic taxonomy category.
     archived_size = 0
     archived_count = 0
-    for label in subject_labels():
+    for label in list(taxonomy.keys()):
         entry = taxonomy.get(label, {})
         folder = service.destination_folder(label, config)
         node = DocItem(
@@ -863,7 +867,7 @@ def build_document_tree(
             kind="folder",
             path=str(folder),
             subject=label,
-            card=SUBJECT_TO_CARD.get(label),
+            card=SUBJECT_TO_CARD.get(label) or f"custom_{label.lower()}",
             exists=folder.is_dir(),
         )
         node.children = [make_file(record, subject=label) for record in scan_dir(folder)]
@@ -3229,7 +3233,8 @@ class SortwiseApp(ctk.CTk):
 
         self._active_custom_folder = str(p)
         folder_name = p.name or str(p)
-        taxonomy = get_subject_taxonomy()
+        config = self._config_store.load()
+        taxonomy = self._service.current_taxonomy(config)
 
         found_docs: list[DocItem] = []
         try:
@@ -3262,6 +3267,8 @@ class SortwiseApp(ctk.CTk):
                             pending=True,
                             scan=True,
                             ranking=list(rating.ranking),
+                            agreement=getattr(rating, "agreement", 1.0),
+                            disagreement=getattr(rating, "disagreement", 0.0),
                         )
                         found_docs.append(item)
                 elif entry.is_dir(follow_symlinks=False):
@@ -3404,9 +3411,13 @@ class SortwiseApp(ctk.CTk):
         self._refresh_badges()
         self._render_table()
         self._refresh_shelf_state()
-        self._update_nav_arrows()
+        config = self._config_store.load()
+        tax = self._service.current_taxonomy(config)
+        self._subject_values = [AUTO_SUBJECT, *tax.keys()]
+        if hasattr(self, "_subject_menu"):
+            self._subject_menu.configure(values=self._subject_values)
         if hasattr(self, "_storage_title_label"):
-            target_name = Path(self._config_store.load().target_root).name or "Library Storage"
+            target_name = Path(config.target_root).name or "Library Storage"
             self._storage_title_label.configure(text=target_name)
         self._update_crumbs()
         pending = stats.get("pending_count", 0)
@@ -3422,10 +3433,12 @@ class SortwiseApp(ctk.CTk):
 
     def _refresh_badges(self) -> None:
         stats = self._stats or {}
+        config = self._config_store.load()
+        tax = self._service.current_taxonomy(config)
         counts = {
             "all": stats.get("total_count", 0),
             "downloads": stats.get("pending_count", 0),
-            "subjects": len(subject_labels()),
+            "subjects": len(tax),
             "review": stats.get("review_count", 0),
             "ledger": len(self._ledger.all()),
         }
@@ -3455,7 +3468,8 @@ class SortwiseApp(ctk.CTk):
         ]
         if not pending:
             return
-        taxonomy = get_subject_taxonomy()
+        config = self._config_store.load()
+        taxonomy = self._service.current_taxonomy(config)
         updated = False
         for item in pending:
             if not getattr(item, "ranking", None) or not item.confidence:
@@ -3465,6 +3479,8 @@ class SortwiseApp(ctk.CTk):
                 item.entropy = rating.entropy
                 item.status = rating.status
                 item.ranking = list(rating.ranking)
+                item.agreement = getattr(rating, "agreement", 1.0)
+                item.disagreement = getattr(rating, "disagreement", 0.0)
                 updated = True
         if updated:
             self._render_table()
@@ -3598,15 +3614,45 @@ class SortwiseApp(ctk.CTk):
         else:
             self._pill_pages.configure(text="pages —")
 
+        config = self._config_store.load()
+        taxonomy = self._service.current_taxonomy(config)
+
         confidence = item.confidence if item.confidence is not None else 0.0
         entropy = item.entropy if item.entropy is not None else 0.0
         state = "pending" if item.pending else "archived"
+
+        # If RLCD agreement is not yet evaluated for this file, compute it now
+        if item.path and getattr(item, "agreement", None) is None:
+            try:
+                from src.rlcd import get_default_router
+                router = get_default_router()
+                eval_text = item.label
+                if info and info.get("title"):
+                    eval_text = f"{info['title']} {eval_text}"
+                dec, _ = router.classify(
+                    eval_text,
+                    taxonomy,
+                    threshold=config.confidence_threshold,
+                    entropy_threshold=config.entropy_threshold,
+                )
+                item.subject = dec.subject
+                item.confidence = dec.confidence
+                item.entropy = dec.entropy
+                item.status = dec.status
+                item.agreement = dec.agreement
+                item.disagreement = dec.disagreement
+                item.ranking = list(dec.ranking)
+                confidence = dec.confidence
+                entropy = dec.entropy
+            except Exception:
+                pass
+
         if item.subject:
-            entry = get_subject_taxonomy().get(item.subject, {})
+            entry = taxonomy.get(item.subject, {})
             colour = self._subject_color(item.subject)
             self._badge_dot.configure(text_color=colour)
             self._badge_label.configure(
-                text=f"{entry.get('code', '')} - {entry.get('name', item.subject)}",
+                text=f"{entry.get('code', '')} - {entry.get('name', item.subject)}".strip(" - "),
                 text_color=self._theme.TEXT,
             )
         else:
@@ -3627,12 +3673,14 @@ class SortwiseApp(ctk.CTk):
 
         rankings = list(item.ranking)
         if not rankings and item.label:
-            rating = rate_document(item.label, get_subject_taxonomy())
+            rating = rate_document(item.label, taxonomy)
             rankings = list(rating.ranking)
             if item.confidence is None or item.confidence == 0:
                 item.confidence = rating.confidence
                 item.entropy = rating.entropy
                 item.status = rating.status
+                item.agreement = getattr(rating, "agreement", 1.0)
+                item.disagreement = getattr(rating, "disagreement", 0.0)
                 confidence = rating.confidence
                 entropy = rating.entropy
 
@@ -3646,7 +3694,7 @@ class SortwiseApp(ctk.CTk):
                     row_frame.pack(fill="x", padx=10, pady=4)
                     row_frame.grid_columnconfigure(1, weight=1)
 
-                    entry = get_subject_taxonomy().get(subj, {})
+                    entry = taxonomy.get(subj, {})
                     short_name = entry.get("code") or entry.get("name") or subj.split(" - ")[-1]
                     if len(short_name) > 20:
                         short_name = short_name[:18] + "…"
@@ -3677,20 +3725,21 @@ class SortwiseApp(ctk.CTk):
                     font=self._mono_font(self._theme.FONT_MONO_SMALL), text_color=self._theme.TEXT_FAINT,
                 ).pack(padx=10, pady=8)
 
-        config = self._config_store.load()
-        self._entropy_label.configure(text=f"Shannon Entropy: {entropy:.2f} bits")
+        agreement = getattr(item, "agreement", 1.0) if getattr(item, "agreement", None) is not None else 1.0
+        disagreement = getattr(item, "disagreement", 0.0) if getattr(item, "disagreement", None) is not None else 0.0
+        self._entropy_label.configure(text=f"Agreement: {agreement*100:.1f}% · Entropy: {entropy:.2f}b")
         if item.status == STATUS_CONFIDENT:
-            self._gate_label.configure(text="GATE: PASS (CONFIDENT)", text_color=self._theme.SUCCESS)
+            self._gate_label.configure(text="RLCD: PASS (CONFIDENT)", text_color=self._theme.SUCCESS)
             if hasattr(self, "_gate_explanation"):
                 self._gate_explanation.configure(
-                    text=f"Confidence {confidence*100:.1f}% ≥ {config.confidence_threshold*100:.0f}% & Entropy {entropy:.2f}b < {config.entropy_threshold:.2f}b -> Automated route safe",
+                    text=f"Confidence {confidence*100:.1f}% & Agreement {agreement*100:.1f}% (JSD {disagreement:.2f}b) -> Automated route safe",
                     text_color=self._theme.SUCCESS,
                 )
         else:
-            self._gate_label.configure(text="GATE: REVIEW REQUIRED", text_color=self._theme.WARN)
+            self._gate_label.configure(text="RLCD: REVIEW REQUIRED", text_color=self._theme.WARN)
             if hasattr(self, "_gate_explanation"):
                 self._gate_explanation.configure(
-                    text=f"Confidence {confidence*100:.1f}% or Entropy {entropy:.2f}b does not clear risk gate. Routed to human review.",
+                    text=f"Confidence {confidence*100:.1f}% or Disagreement JSD {disagreement:.2f}b requires review.",
                     text_color=self._theme.WARN,
                 )
 
@@ -3701,7 +3750,8 @@ class SortwiseApp(ctk.CTk):
         self._rename_hint.configure(text="Suggested from the extracted title; edit freely before routing.")
         
         # Calculate planned target destination
-        target_folder = self._service.destination_folder(item.subject or "CS2227 - AI and ML", config)
+        fallback_cat = next(iter(taxonomy.keys()), "CS2227 - AI and ML")
+        target_folder = self._service.destination_folder(item.subject or fallback_cat, config)
         current_stem = self._rename_entry.get().strip() or Path(item.path).stem
         self._target_path_box.configure(text=f"{target_folder} / {current_stem}.{item.file_type or 'pdf'}")
 
@@ -3738,13 +3788,21 @@ class SortwiseApp(ctk.CTk):
             suggestion = suggest_filename(title, subject, self._selected.file_type or "pdf")
             self._rename_entry.delete(0, "end")
             self._rename_entry.insert(0, Path(suggestion).stem)
+        config = self._config_store.load()
+        tax = self._service.current_taxonomy(config)
         if subject is None:
             self._inspector_note.configure(text="Reverted to the calibrated prediction.")
+            sub = self._selected.subject or next(iter(tax.keys()), "")
+            target_folder = self._service.destination_folder(sub, config)
+            current_stem = self._rename_entry.get().strip() or Path(self._selected.path or "doc").stem
+            self._target_path_box.configure(text=f"{target_folder} / {current_stem}.{self._selected.file_type or 'pdf'}")
             return
-        entry = get_subject_taxonomy().get(subject, {})
-        folder = self._service.destination_folder(subject, self._config_store.load())
+        entry = tax.get(subject, {})
+        folder = self._service.destination_folder(subject, config)
+        current_stem = self._rename_entry.get().strip() or Path(self._selected.path or "doc").stem
+        self._target_path_box.configure(text=f"{folder} / {current_stem}.{self._selected.file_type or 'pdf'}")
         self._inspector_note.configure(
-            text=f"Manual override: {entry.get('code', '')} - {entry.get('name', subject)}\n-> {folder}"
+            text=f"Manual destination: {entry.get('code', '')} - {entry.get('name', subject)}".strip(" - ") + f"\n-> {folder}"
         )
 
     # -- routing ----------------------------------------------------------- #

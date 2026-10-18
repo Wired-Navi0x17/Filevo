@@ -206,6 +206,8 @@ class ConfidenceRating:
     entropy: float
     status: str
     ranking: tuple[tuple[str, float], ...] = ()
+    agreement: float = 1.0
+    disagreement: float = 0.0
 
     @property
     def confident(self) -> bool:
@@ -269,11 +271,13 @@ def rate_scores(
     threshold: float = CONFIDENCE_THRESHOLD,
     entropy_threshold: float = ENTROPY_THRESHOLD,
     temperature: float = _RATING_TEMPERATURE,
+    agreement: float = 1.0,
+    disagreement: float = 0.0,
 ) -> ConfidenceRating:
     """Turn raw keyword scores into a calibrated :class:`ConfidenceRating`."""
     labels = list(scores)
     if not labels:
-        return ConfidenceRating("", 0.0, 0.0, 0.0, STATUS_AMBIGUOUS, ())
+        return ConfidenceRating("", 0.0, 0.0, 0.0, STATUS_AMBIGUOUS, (), agreement=0.0, disagreement=1.0)
 
     values = [float(scores[label]) for label in labels]
     probs = tempered_softmax(values, temperature)
@@ -281,7 +285,7 @@ def rate_scores(
     best = order[0]
     confidence = float(probs[best])
     entropy = shannon_entropy(probs)
-    confident = confidence >= threshold and entropy < entropy_threshold
+    confident = confidence >= threshold and entropy < entropy_threshold and disagreement <= 0.25
     ranking = tuple((labels[i], float(probs[i])) for i in order)
     return ConfidenceRating(
         subject=labels[best],
@@ -290,6 +294,8 @@ def rate_scores(
         entropy=entropy,
         status=STATUS_CONFIDENT if confident else STATUS_AMBIGUOUS,
         ranking=ranking,
+        agreement=agreement,
+        disagreement=disagreement,
     )
 
 
@@ -301,10 +307,18 @@ def rate_document(
     entropy_threshold: float = ENTROPY_THRESHOLD,
     temperature: float = _RATING_TEMPERATURE,
 ) -> ConfidenceRating:
-    """Score a filename and rate it ``CONFIDENT`` / ``AMBIGUOUS``."""
+    """Score a filename and rate it ``CONFIDENT`` / ``AMBIGUOUS`` with RLCD policy bias."""
     taxonomy = taxonomy if taxonomy is not None else get_subject_taxonomy()
+    scores = keyword_scores(name, taxonomy)
+    try:
+        from .rlcd import get_default_policy_store
+        ps = get_default_policy_store()
+        for label in scores:
+            scores[label] += ps.get_bias(label)
+    except Exception:
+        pass
     return rate_scores(
-        keyword_scores(name, taxonomy),
+        scores,
         threshold=threshold,
         entropy_threshold=entropy_threshold,
         temperature=temperature,
@@ -350,6 +364,8 @@ class ScannedDocument:
     status: str
     score: float = 0.0
     ranking: tuple[tuple[str, float], ...] = ()
+    agreement: float = 1.0
+    disagreement: float = 0.0
 
     @property
     def confident(self) -> bool:

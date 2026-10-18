@@ -555,7 +555,7 @@ class SortwiseService:
         title, first heading, or the original stem); the remaining placeholders
         come from the routed subject when one is known.
         """
-        entry = get_subject_taxonomy().get(subject or "", {})
+        entry = discover_target_taxonomy(config.target_root).get(subject or "", {})
         mapping = {
             "title": doc.title or Path(doc.path).stem,
             "stem": Path(doc.path).stem,
@@ -649,7 +649,8 @@ class SortwiseService:
             entropy = 0.0
             chosen = subject
 
-        if chosen not in get_subject_taxonomy():
+        tax = self.current_taxonomy(config)
+        if chosen not in tax:
             raise SortwiseError(f"unknown subject: {chosen}", 400)
 
         status = self._status(confidence, entropy, config)
@@ -688,6 +689,17 @@ class SortwiseService:
                     shutil.move(str(source), str(target))
                     transferred = True
                     message = f"Moved to {target.name}"
+                try:
+                    from .rlcd import get_default_policy_store
+                    ps = get_default_policy_store()
+                    ps.record_feedback(
+                        chosen_category=chosen,
+                        predicted_category=decision.subject if not telemetry_error else chosen,
+                        agreement=getattr(decision, "agreement", 1.0),
+                        is_override=manual and (chosen != getattr(decision, "subject", chosen)),
+                    )
+                except Exception:
+                    pass
             except OSError as exc:
                 raise SortwiseError(f"could not transfer file: {exc}", 500) from exc
         else:
