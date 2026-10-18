@@ -1420,6 +1420,7 @@ class SortwiseApp(ctk.CTk):
         self._selected: DocItem | None = None
         self._doc_info: dict[str, Any] | None = None
         self._rename_dirty = False
+        self._op_mode: str = "move"  # "move" or "copy"
         self._subject_values: list[str] = [AUTO_SUBJECT, *subject_labels()]
 
         # View + navigation history
@@ -1685,9 +1686,31 @@ class SortwiseApp(ctk.CTk):
 
         actions = ctk.CTkFrame(bar, fg_color="transparent")
         actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
+        self._pick_folder_button = self._action_button(actions, "Choose Folder...", self.pick_custom_folder, accent=False)
+        self._pick_file_button = self._action_button(actions, "Choose File...", self.pick_custom_file, accent=False)
         self._scan_disk_button = self._action_button(actions, "Scan Disk", self.open_scan_dialog)
         self._scan_button = self._action_button(actions, "Scan Watch Dir", self.scan_watch_dir)
         self._auto_button = self._action_button(actions, "Auto-Route Confident", self.auto_route_confident)
+        
+        # Segmented Copy vs Cut Mode toggle
+        mode_frame = ctk.CTkFrame(actions, fg_color=self._theme.SURFACE, corner_radius=self._theme.RADIUS_SMALL,
+                                  border_width=1, border_color=self._theme.BORDER)
+        mode_frame.pack(side="left", padx=5)
+        self._btn_mode_cut = ctk.CTkButton(
+            mode_frame, text="Cut (Move)", width=90, height=36, corner_radius=self._theme.RADIUS_SMALL - 2,
+            fg_color=self._theme.ACCENT_DEEP, hover_color=self._theme.ACCENT, text_color="#ffffff",
+            font=self._ui_font(self._theme.FONT_BUTTON, "bold"),
+            command=lambda: self._set_op_mode("move"),
+        )
+        self._btn_mode_cut.pack(side="left", padx=2, pady=2)
+        self._btn_mode_copy = ctk.CTkButton(
+            mode_frame, text="Copy", width=75, height=36, corner_radius=self._theme.RADIUS_SMALL - 2,
+            fg_color="transparent", hover_color=self._theme.HOVER, text_color=self._theme.TEXT_MUTED,
+            font=self._ui_font(self._theme.FONT_BUTTON, "normal"),
+            command=lambda: self._set_op_mode("copy"),
+        )
+        self._btn_mode_copy.pack(side="left", padx=2, pady=2)
+
         self._undo_button = self._action_button(actions, "Undo Last", self.undo_last, accent=False)
         self._settings_button = self._action_button(actions, "Settings", self.open_settings, accent=False)
 
@@ -2026,18 +2049,26 @@ class SortwiseApp(ctk.CTk):
         )
         self._rename_hint.grid(row=13, column=0, sticky="ew", padx=(10, 12), pady=(6, 0))
 
+        self._section_label(body, "TARGET DESTINATION PREVIEW").grid(
+            row=14, column=0, sticky="w", padx=(10, 12), pady=(12, 4))
+        self._target_path_box = ctk.CTkLabel(
+            body, text="—", font=self._mono_font(self._theme.FONT_MONO_SMALL),
+            text_color="#93c5fd", anchor="w", justify="left", wraplength=368,
+        )
+        self._target_path_box.grid(row=15, column=0, sticky="ew", padx=(10, 12), pady=(0, 8))
+
         self._route_button = ctk.CTkButton(
-            body, text="Route Document", height=48, corner_radius=self._theme.RADIUS_SMALL,
+            body, text="Confirm Transfer", height=48, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ACCENT_DEEP, hover_color=self._theme.ACCENT, text_color="#ffffff",
             font=self._ui_font(self._theme.FONT_BUTTON, "bold"), state="disabled", command=self.route_document,
         )
-        self._route_button.grid(row=14, column=0, sticky="ew", padx=(10, 12), pady=(16, 6))
+        self._route_button.grid(row=16, column=0, sticky="ew", padx=(10, 12), pady=(12, 6))
 
         self._inspector_note = ctk.CTkLabel(
             body, text="", font=self._ui_font(self._theme.FONT_HINT), text_color=self._theme.TEXT_FAINT,
             anchor="w", justify="left", wraplength=368,
         )
-        self._inspector_note.grid(row=15, column=0, sticky="ew", padx=(10, 12), pady=(0, 14))
+        self._inspector_note.grid(row=17, column=0, sticky="ew", padx=(10, 12), pady=(0, 14))
 
     def _pill(self, parent: tk.Misc, text: str) -> ctk.CTkLabel:
         frame = ctk.CTkFrame(parent, fg_color=self._theme.ELEVATED, corner_radius=8,
@@ -2633,7 +2664,7 @@ class SortwiseApp(ctk.CTk):
                         path=item.path,
                         config=config,
                         subject=item.subject or None,
-                        move=True,
+                        move=(self._op_mode == "move"),
                     )
                     routed.append(res)
                 except Exception:
@@ -2666,6 +2697,69 @@ class SortwiseApp(ctk.CTk):
 
     def scan_watch_dir(self) -> None:
         self.load_document_tree()
+
+    def pick_custom_folder(self) -> None:
+        """Allow user to select ANY folder from disk to scan and route."""
+        folder = filedialog.askdirectory(
+            parent=self,
+            title="Choose Folder to Scan & Route",
+            initialdir=str(Path.home()),
+        )
+        if folder:
+            cfg = self._config_store.load()
+            cfg.watch_folder = folder
+            self._config_store.save(cfg)
+            self._crumb_label.configure(text=f"> {folder}")
+            self._set_status(f"Scanning folder: {folder}", tone="ok")
+            self.load_document_tree()
+
+    def pick_custom_file(self) -> None:
+        """Allow user to pick an individual document from disk to inspect & route."""
+        file_path = filedialog.askopenfilename(
+            parent=self,
+            title="Choose Document to Route",
+            initialdir=str(Path.home()),
+            filetypes=[("Documents", "*.pdf *.docx *.pptx"), ("All Files", "*.*")],
+        )
+        if file_path:
+            p = Path(file_path)
+            item = DocItem(
+                key=f"file:{p.resolve()}",
+                label=p.name,
+                path=str(p.resolve()),
+                size=p.stat().st_size if p.exists() else 0,
+                file_type=p.suffix.lstrip(".").casefold(),
+                is_file=True,
+                pending=True,
+            )
+            self._selected = item
+            self._show_file(item)
+            self._render_table()
+            self._set_status(f"Inspecting file: {p.name}", tone="ok")
+
+    def _set_op_mode(self, mode: str) -> None:
+        self._op_mode = "copy" if mode == "copy" else "move"
+        if self._op_mode == "copy":
+            self._btn_mode_copy.configure(
+                fg_color=self._theme.ACCENT_DEEP, text_color="#ffffff",
+                font=self._ui_font(self._theme.FONT_BUTTON, "bold"),
+            )
+            self._btn_mode_cut.configure(
+                fg_color="transparent", text_color=self._theme.TEXT_MUTED,
+                font=self._ui_font(self._theme.FONT_BUTTON, "normal"),
+            )
+            self._set_status("Operation mode: COPY (Original files will remain untouched)", tone="ok")
+        else:
+            self._btn_mode_cut.configure(
+                fg_color=self._theme.ACCENT_DEEP, text_color="#ffffff",
+                font=self._ui_font(self._theme.FONT_BUTTON, "bold"),
+            )
+            self._btn_mode_copy.configure(
+                fg_color="transparent", text_color=self._theme.TEXT_MUTED,
+                font=self._ui_font(self._theme.FONT_BUTTON, "normal"),
+            )
+            self._set_status("Operation mode: CUT / MOVE (Files will be relocated)", tone="ok")
+        self._refresh_route_button()
 
     def _apply_tree(self, payload: tuple[list[DocItem], dict[str, Any]]) -> None:
         tree, stats = payload
@@ -2907,7 +3001,13 @@ class SortwiseApp(ctk.CTk):
             self._rename_entry.delete(0, "end")
             self._rename_entry.insert(0, Path(suggestion).stem)
         self._rename_hint.configure(text="Suggested from the extracted title; edit freely before routing.")
-        note = "Choose a destination and press Route Document."
+        
+        # Calculate planned target destination
+        target_folder = self._service.destination_folder(item.subject or "CS2227 - AI and ML", config)
+        current_stem = self._rename_entry.get().strip() or Path(item.path).stem
+        self._target_path_box.configure(text=f"{target_folder} / {current_stem}.{item.file_type or 'pdf'}")
+
+        note = "Review destination path and click Confirm Transfer."
         if info is not None and info.get("error"):
             note = f"Extraction warning: {info['error']}"
         if not item.pending:
@@ -2920,7 +3020,9 @@ class SortwiseApp(ctk.CTk):
         eligible = bool(
             item is not None and item.is_file and item.path and item.pending and not self._busy
         )
+        mode_text = "Copy" if self._op_mode == "copy" else "Cut & Move"
         self._route_button.configure(
+            text=f"Confirm {mode_text}",
             state="normal" if eligible else "disabled",
             fg_color=self._theme.ACCENT_DEEP if eligible else self._theme.ELEVATED,
             text_color="#ffffff" if eligible else self._theme.TEXT_FAINT,
@@ -2964,8 +3066,26 @@ class SortwiseApp(ctk.CTk):
         service = self._service
         path = item.path
 
+        # Prompt interactive confirmation modal
+        mode_label = "Copy (preserve original)" if self._op_mode == "copy" else "Cut & Move (relocate original)"
+        target_preview = self._target_path_box.cget("text")
+        confirm = messagebox.askyesno(
+            title="Confirm Transfer",
+            message=(
+                f"Action: {mode_label}\n\n"
+                f"Source: {path}\n\n"
+                f"Destination: {target_preview}\n\n"
+                f"Proceed with transfer?"
+            ),
+            parent=self,
+        )
+        if not confirm:
+            self._set_status("Transfer cancelled by user", tone="info")
+            return
+
+        should_move = self._op_mode == "move"
         def work() -> dict[str, Any]:
-            return service.route(path=path, config=config, rename=rename, subject=subject, move=True)
+            return service.route(path=path, config=config, rename=rename, subject=subject, move=should_move)
 
         def done(result: dict[str, Any]) -> None:
             destination = result.get("destination", {})
