@@ -1426,7 +1426,7 @@ class SortwiseApp(ctk.CTk):
         service: SortwiseService | None = None,
         classifier: Any | None = None,
         autoload: bool = True,
-        show_scan_dialog: bool = True,
+        show_scan_dialog: bool = False,
         theme: type[Theme] = Theme,
     ) -> None:
         ctk.set_appearance_mode("dark")
@@ -1702,66 +1702,96 @@ class SortwiseApp(ctk.CTk):
         elif not active:
             frame.configure(fg_color="transparent")
 
+    def _vsep(self, parent: tk.Misc) -> ctk.CTkFrame:
+        sep = ctk.CTkFrame(parent, width=1, height=26, fg_color=self._theme.BORDER)
+        sep.pack(side="left", padx=8, pady=4)
+        return sep
+
     # -- top navigation ---------------------------------------------------- #
     def _build_topnav(self, parent: tk.Misc) -> None:
         bar = self._card(parent)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, self._theme.GAP))
         bar.grid_columnconfigure(1, weight=1)
 
-        nav = ctk.CTkFrame(bar, fg_color="transparent")
-        nav.grid(row=0, column=0, sticky="w", padx=(12, 6), pady=(12, 6))
-        self._back_button = self._nav_arrow(nav, "<", self._nav_back)
-        self._forward_button = self._nav_arrow(nav, ">", self._nav_forward)
+        # Row 0: History, Path breadcrumbs, Search
+        nav_crumb = ctk.CTkFrame(bar, fg_color="transparent")
+        nav_crumb.grid(row=0, column=0, columnspan=2, sticky="w", padx=(12, 6), pady=(10, 4))
 
-        crumb = ctk.CTkFrame(bar, fg_color="transparent")
-        crumb.grid(row=0, column=1, sticky="w", padx=6, pady=(12, 6))
-        disk = self._icon("disk.png", 26)
+        self._back_button = self._nav_arrow(nav_crumb, "<", self._nav_back)
+        self._forward_button = self._nav_arrow(nav_crumb, ">", self._nav_forward)
+
+        disk = self._icon("disk.png", 22)
         if disk is not None:
-            ctk.CTkLabel(crumb, image=disk, text="").pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(nav_crumb, image=disk, text="").pack(side="left", padx=(6, 6))
+
         self._crumb_label = ctk.CTkLabel(
-            crumb, text="> Home > Library", font=self._mono_font(self._theme.FONT_MONO),
+            nav_crumb, text="> Home > Library", font=self._mono_font(self._theme.FONT_MONO),
             text_color=self._theme.TEXT_MUTED, anchor="w",
         )
-        self._crumb_label.pack(side="left")
+        self._crumb_label.pack(side="left", padx=(0, 8))
 
         self._search = ctk.CTkEntry(
-            bar, width=330, height=42, corner_radius=self._theme.RADIUS_SMALL,
+            bar, width=280, height=36, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.BG, border_color=self._theme.BORDER,
             text_color=self._theme.TEXT, placeholder_text="Search documents...",
             font=self._ui_font(self._theme.FONT_BASE),
         )
-        self._search.grid(row=0, column=2, sticky="e", padx=(6, 14), pady=(12, 6))
+        self._search.grid(row=0, column=2, sticky="e", padx=(6, 14), pady=(10, 4))
         self._search.bind("<KeyRelease>", lambda _e: self._render_table())
 
+        # Row 1: Actions & Controls Bar (Clean visual groups with clear separation)
         actions = ctk.CTkFrame(bar, fg_color="transparent")
-        actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
-        self._settings_button = self._action_button(actions, "⚙ Setup & Paths", self.open_settings, accent=False)
-        self._dolphin_button = self._action_button(actions, "📂 Open in Dolphin", self.open_active_in_dolphin, accent=False)
-        self._pick_folder_button = self._action_button(actions, "📁 Choose Folder", self.pick_custom_folder, accent=False)
-        self._pick_file_button = self._action_button(actions, "📄 Choose File", self.pick_custom_file, accent=False)
-        self._scan_disk_button = self._action_button(actions, "🔍 Fast Scan", self.start_disk_scan, accent=True)
-        self._auto_button = self._action_button(actions, "⚡ Auto-Route", self.auto_route_confident, accent=False)
-        
+        actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 10))
+
+        # Group 1: Source & Intake Files
+        self._pick_folder_button = self._action_button(
+            actions, "📁 Choose Folder", self.pick_custom_folder, accent=False, width=128, height=36
+        )
+        self._pick_file_button = self._action_button(
+            actions, "📄 Pick File", self.pick_custom_file, accent=False, width=98, height=36
+        )
+        self._dolphin_button = self._action_button(
+            actions, "📂 Dolphin", self.open_active_in_dolphin, accent=False, width=92, height=36
+        )
+
+        self._vsep(actions)
+
+        # Group 2: Process & Route
+        self._scan_disk_button = self._action_button(
+            actions, "🔍 Scan Folder", self.start_disk_scan, accent=True, width=118, height=36
+        )
+        self._auto_button = self._action_button(
+            actions, "⚡ Auto-Route", self.auto_route_confident, accent=False, width=112, height=36
+        )
+
         # Segmented Copy vs Cut Mode toggle
         mode_frame = ctk.CTkFrame(actions, fg_color=self._theme.SURFACE, corner_radius=self._theme.RADIUS_SMALL,
-                                  border_width=1, border_color=self._theme.BORDER)
-        mode_frame.pack(side="left", padx=5)
+                                  border_width=1, border_color=self._theme.BORDER, height=36)
+        mode_frame.pack(side="left", padx=4)
         self._btn_mode_cut = ctk.CTkButton(
-            mode_frame, text="Cut (Move)", width=90, height=36, corner_radius=self._theme.RADIUS_SMALL - 2,
+            mode_frame, text="Cut", width=54, height=30, corner_radius=self._theme.RADIUS_SMALL - 2,
             fg_color=self._theme.ACCENT_DEEP, hover_color=self._theme.ACCENT, text_color="#ffffff",
             font=self._ui_font(self._theme.FONT_BUTTON, "bold"),
             command=lambda: self._set_op_mode("move"),
         )
         self._btn_mode_cut.pack(side="left", padx=2, pady=2)
         self._btn_mode_copy = ctk.CTkButton(
-            mode_frame, text="Copy", width=75, height=36, corner_radius=self._theme.RADIUS_SMALL - 2,
+            mode_frame, text="Copy", width=54, height=30, corner_radius=self._theme.RADIUS_SMALL - 2,
             fg_color="transparent", hover_color=self._theme.HOVER, text_color=self._theme.TEXT_MUTED,
             font=self._ui_font(self._theme.FONT_BUTTON, "normal"),
             command=lambda: self._set_op_mode("copy"),
         )
         self._btn_mode_copy.pack(side="left", padx=2, pady=2)
 
-        self._undo_button = self._action_button(actions, "↩ Undo", self.undo_last, accent=False)
+        self._vsep(actions)
+
+        # Group 3: History & Settings
+        self._undo_button = self._action_button(
+            actions, "↩ Undo", self.undo_last, accent=False, width=78, height=36
+        )
+        self._settings_button = self._action_button(
+            actions, "⚙ Settings", self.open_settings, accent=False, width=95, height=36
+        )
 
         self._mode_label = ctk.CTkLabel(actions, text="", font=self._mono_font(self._theme.FONT_MONO_SMALL),
                                         text_color=self._theme.TEXT_FAINT)
@@ -1769,27 +1799,28 @@ class SortwiseApp(ctk.CTk):
 
     def _nav_arrow(self, parent: tk.Misc, text: str, command: Callable[[], None]) -> ctk.CTkButton:
         button = ctk.CTkButton(
-            parent, text=text, width=38, height=38, corner_radius=self._theme.RADIUS_SMALL,
+            parent, text=text, width=34, height=34, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ELEVATED, hover_color=self._theme.HOVER, border_width=1,
             border_color=self._theme.BORDER, text_color=self._theme.TEXT_MUTED,
             font=self._ui_font(self._theme.FONT_BUTTON, "bold"), command=command,
         )
-        button.pack(side="left", padx=(0, 6))
+        button.pack(side="left", padx=(0, 4))
         return button
 
     def _action_button(
-        self, parent: tk.Misc, text: str, command: Callable[[], None], *, accent: bool = True
+        self, parent: tk.Misc, text: str, command: Callable[[], None], *, accent: bool = True,
+        width: int = 120, height: int = 36
     ) -> ctk.CTkButton:
         button = ctk.CTkButton(
-            parent, text=text, width=178, height=42, corner_radius=self._theme.RADIUS_SMALL,
+            parent, text=text, width=width, height=height, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ACCENT_DEEP if accent else self._theme.ELEVATED,
             hover_color=self._theme.ACCENT if accent else self._theme.HOVER,
             border_width=0 if accent else 1, border_color=self._theme.BORDER,
-            text_color="#ffffff" if accent else self._theme.TEXT_MUTED,
+            text_color="#ffffff" if accent else self._theme.TEXT,
             font=self._ui_font(self._theme.FONT_BUTTON, "bold" if accent else "normal"),
             command=command,
         )
-        button.pack(side="left", padx=5)
+        button.pack(side="left", padx=(0, 4))
         return button
 
     # -- folder shelf (Image 1) -------------------------------------------- #
@@ -1867,7 +1898,7 @@ class SortwiseApp(ctk.CTk):
         bar = self._card(parent, height=BULK_HEIGHT)
         bar.grid(row=1, column=0, sticky="ew", pady=(0, self._theme.GAP))
         bar.grid_propagate(False)
-        bar.grid_columnconfigure(2, weight=1)
+        bar.grid_columnconfigure(1, weight=1)
         self._bulk_bar = bar
 
         self._bulk_confident = ctk.CTkCheckBox(
@@ -1876,40 +1907,41 @@ class SortwiseApp(ctk.CTk):
             text_color=self._theme.TEXT, fg_color=self._theme.ACCENT,
             hover_color=self._theme.ACCENT_DEEP, border_color=self._theme.BORDER_STRONG,
             checkmark_color="#ffffff", corner_radius=6,
-            command=self._toggle_all_confident, width=230, height=32,
+            command=self._toggle_all_confident, width=175, height=32,
         )
-        self._bulk_confident.grid(row=0, column=0, padx=(18, 20), pady=11, sticky="w")
+        self._bulk_confident.grid(row=0, column=0, padx=(16, 12), pady=9, sticky="w")
 
         self._bulk_summary = ctk.CTkLabel(
-            bar, text="0 documents found",
+            bar, text="",
             font=self._mono_font(self._theme.FONT_MONO_SMALL),
             text_color=self._theme.TEXT_MUTED, anchor="w",
         )
-        self._bulk_summary.grid(row=0, column=1, sticky="w")
+        self._bulk_summary.grid(row=0, column=1, sticky="w", padx=6)
 
         self._batch_progress = ctk.CTkProgressBar(
-            bar, width=240, height=8, corner_radius=4,
+            bar, width=190, height=8, corner_radius=4,
             fg_color=self._theme.ELEVATED, progress_color=self._theme.ACCENT,
         )
         self._batch_progress.set(0.0)
-        self._batch_progress.grid(row=0, column=2, padx=18, sticky="e")
+        self._batch_progress.grid(row=0, column=2, padx=12, sticky="e")
 
         self._batch_button = ctk.CTkButton(
-            bar, text="Batch Route", width=178, height=42,
+            bar, text="Batch Route", width=135, height=36,
             corner_radius=self._theme.RADIUS_SMALL, fg_color=self._theme.ACCENT_DEEP,
             hover_color=self._theme.ACCENT, text_color="#ffffff",
             font=self._ui_font(self._theme.FONT_BUTTON, "bold"),
             command=self.batch_route_selected,
         )
-        self._batch_button.grid(row=0, column=3, padx=(0, 10), pady=7, sticky="e")
+        self._batch_button.grid(row=0, column=3, padx=(0, 8), pady=7, sticky="e")
 
-        ctk.CTkButton(
-            bar, text="Clear results", width=148, height=42,
+        self._clear_scan_button = ctk.CTkButton(
+            bar, text="✕ Dismiss", width=95, height=36,
             corner_radius=self._theme.RADIUS_SMALL, fg_color=self._theme.ELEVATED,
             hover_color=self._theme.HOVER, border_width=1, border_color=self._theme.BORDER,
             text_color=self._theme.TEXT_MUTED, font=self._ui_font(self._theme.FONT_BUTTON),
             command=self.clear_scan_results,
-        ).grid(row=0, column=4, padx=(0, 18), pady=7, sticky="e")
+        )
+        self._clear_scan_button.grid(row=0, column=4, padx=(0, 16), pady=7, sticky="e")
 
         bar.grid_remove()
 
@@ -2231,22 +2263,25 @@ class SortwiseApp(ctk.CTk):
         return next((item for item in self._tree if item.card == key), None)
 
     def _update_crumbs(self) -> None:
-        target_name = Path(self._config_store.load().target_root).name or "Library"
-        parts = ["Home", target_name]
+        cfg = self._config_store.load()
+        watch_name = Path(cfg.watch_folder).name or "Downloads"
+        target_name = Path(cfg.target_root).name or "Library"
         mode, key = self._view
         if mode == "card" and key:
             node = self._top_by_card(key)
-            if node is not None:
-                parts.append(node.label)
+            label = node.label if node is not None else key
+            crumb_text = f"📁 {target_name} > {label}"
         elif mode == "downloads":
-            parts.append("Intake")
+            crumb_text = f"📥 Intake: {watch_name}  ➔  🎯 Target: {target_name}"
         elif mode == "subjects":
-            parts.append("Categories")
+            crumb_text = f"📚 Categories in {target_name}"
         elif mode == "review":
-            parts.append("Review Queue")
+            crumb_text = "⚠️ Review Queue (Ambiguous Matches)"
         elif mode == SCAN_MODE:
-            parts.append("Disk Scan Results")
-        self._crumb_label.configure(text=" > ".join(parts))
+            crumb_text = f"🔍 Scan Results ({watch_name})"
+        else:
+            crumb_text = f"📥 Intake: {watch_name}  ➔  🎯 Target: {target_name}"
+        self._crumb_label.configure(text=crumb_text)
 
     def _update_mode_label(self) -> None:
         mode, _key = self._view
@@ -2582,21 +2617,24 @@ class SortwiseApp(ctk.CTk):
         self._scan_cancel = threading.Event()
 
         # Display progress directly in the main window bulk toolbar - NO SEPARATE WINDOW
+        folder_display = Path(roots[0]).name if roots and len(roots) == 1 else f"{len(roots)} folders"
         self._show_bulk_bar(True)
         if hasattr(self, "_bulk_confident"):
             self._bulk_confident.grid_remove()
+        if hasattr(self, "_clear_scan_button"):
+            self._clear_scan_button.grid_remove()
         if hasattr(self, "_batch_button"):
             self._batch_button.configure(
                 text="Cancel Scan", command=self.cancel_disk_scan,
                 fg_color=self._theme.WARN, hover_color="#dc2626", text_color="#ffffff"
             )
-        self._bulk_summary.configure(text=f"Scanning documents in {len(roots)} location(s)...")
+        self._bulk_summary.configure(text=f"🔍 Scanning {folder_display}...")
         self._batch_progress.configure(mode="indeterminate")
         try:
             self._batch_progress.start()
         except Exception:
             pass
-        self._set_busy(True, "Scanning documents inline…")
+        self._set_busy(True, f"Scanning {folder_display}…")
 
         def worker() -> list[ScannedDocument]:
             scanner = DiskScanner(workers=default_workers(), progress_interval=0.08)
@@ -2618,10 +2656,13 @@ class SortwiseApp(ctk.CTk):
             try:
                 self._batch_progress.stop()
                 self._batch_progress.configure(mode="determinate")
+                self._batch_progress.set(1.0)
             except Exception:
                 pass
             if hasattr(self, "_bulk_confident"):
                 self._bulk_confident.grid()
+            if hasattr(self, "_clear_scan_button"):
+                self._clear_scan_button.grid()
             if hasattr(self, "_batch_button"):
                 self._batch_button.configure(
                     text="Batch Route", command=self.batch_route_selected,
@@ -2639,6 +2680,8 @@ class SortwiseApp(ctk.CTk):
                 pass
             if hasattr(self, "_bulk_confident"):
                 self._bulk_confident.grid()
+            if hasattr(self, "_clear_scan_button"):
+                self._clear_scan_button.grid()
             if hasattr(self, "_batch_button"):
                 self._batch_button.configure(
                     text="Batch Route", command=self.batch_route_selected,
@@ -2657,7 +2700,8 @@ class SortwiseApp(ctk.CTk):
     def _update_inline_scan_progress(self, progress: ScanProgress) -> None:
         if not self._scan_running:
             return
-        msg = f"Scanning… {progress.directories} folders · {progress.documents} docs found ({progress.elapsed:.1f}s)"
+        folder_name = Path(progress.current).name if progress.current else "folder"
+        msg = f"🔍 Scanning {folder_name}… {progress.documents} docs found ({progress.elapsed:.1f}s)"
         try:
             self._bulk_summary.configure(text=msg)
             self._set_status(msg, tone="busy")
@@ -2729,9 +2773,9 @@ class SortwiseApp(ctk.CTk):
         total = len(self._scan_results)
         confident = sum(1 for item in self._scan_results if item.status == STATUS_CONFIDENT)
         selected = sum(1 for item in self._scan_results if item.selected)
-        text = f"{total} document(s) discovered · {confident} confident"
+        text = f"✓ Found {total} documents · {confident} confident"
         if selected:
-            text += f" · {selected} selected"
+            text += f" ({selected} selected)"
         try:
             self._bulk_summary.configure(text=text)
         except tk.TclError:  # pragma: no cover
@@ -3593,6 +3637,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--watch", default=None, help="Override the watch folder for this session")
     parser.add_argument("--target", default=None, help="Override the target root for this session")
     parser.add_argument(
+        "--scan",
+        action="store_true",
+        help="Start disk scan immediately on launch",
+    )
+    parser.add_argument(
         "--no-scan-wizard",
         "--no-scan-dialog",
         dest="no_scan_dialog",
@@ -3619,7 +3668,7 @@ def main(argv: list[str] | None = None) -> int:
         app = SortwiseApp(
             config_path=config_path,
             ledger_path=ledger_path,
-            show_scan_dialog=not args.no_scan_dialog,
+            show_scan_dialog=bool(getattr(args, "scan", False)),
         )
     except tk.TclError as exc:  # pragma: no cover - no display available
         print(
