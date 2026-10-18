@@ -451,6 +451,7 @@ class Theme:
     # headers 20-24pt, section labels 16pt.
     FONT_HEADER = 24        # window / pane headers
     FONT_HEADER_SMALL = 20  # secondary headers (ledger, inspector)
+    FONT_TITLE = 20         # title alias
     FONT_SUBHEADER = 18     # storage block title
     FONT_SECTION = 16       # small-caps section labels
     FONT_BASE = 15          # body / navigation text
@@ -2015,25 +2016,20 @@ class SortwiseApp(ctk.CTk):
         actions = ctk.CTkFrame(bar, fg_color="transparent")
         actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 10))
 
-        # Group 1: Source & Intake Files
+        # Source: only one option for folder, only one for file
         self._pick_folder_button = self._action_button(
-            actions, "📁 Choose Folder", self.pick_custom_folder, accent=False, width=128, height=36
+            actions, "📁 Open Folder", self.pick_custom_folder, accent=False, width=126, height=36
         )
+        self._scan_disk_button = self._pick_folder_button  # alias for backward-compatibility
         self._pick_file_button = self._action_button(
-            actions, "📄 Pick File", self.pick_custom_file, accent=False, width=98, height=36
-        )
-        self._dolphin_button = self._action_button(
-            actions, "📂 Dolphin", self.open_active_in_dolphin, accent=False, width=92, height=36
+            actions, "📄 Open File", self.pick_custom_file, accent=False, width=110, height=36
         )
 
         self._vsep(actions)
 
-        # Group 2: Process & Route
-        self._scan_disk_button = self._action_button(
-            actions, "🔍 Scan Folder", self.start_disk_scan, accent=True, width=118, height=36
-        )
+        # Routing & Mode
         self._auto_button = self._action_button(
-            actions, "⚡ Auto-Route", self.auto_route_confident, accent=False, width=112, height=36
+            actions, "⚡ Auto-Route", self.auto_route_confident, accent=True, width=118, height=36
         )
 
         # Segmented Copy vs Cut Mode toggle
@@ -4071,16 +4067,17 @@ class SortwiseApp(ctk.CTk):
         self._busy = busy
         state = "disabled" if busy else "normal"
         for button in (
-            self._scan_button,
-            self._scan_disk_button,
-            self._auto_button,
-            self._undo_button,
-            self._settings_button,
+            getattr(self, "_pick_folder_button", None),
+            getattr(self, "_pick_file_button", None),
+            getattr(self, "_auto_button", None),
+            getattr(self, "_undo_button", None),
+            getattr(self, "_settings_button", None),
         ):
-            try:
-                button.configure(state=state)
-            except (AttributeError, tk.TclError):
-                pass
+            if button is not None:
+                try:
+                    button.configure(state=state)
+                except (AttributeError, tk.TclError):
+                    pass
         if busy:
             self._set_status(text or "Working…", tone="busy")
         self._refresh_route_button()
