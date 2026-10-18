@@ -71,6 +71,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Ensure Nix-ld shared libraries (e.g. libstdc++.so.6) are reachable on NixOS
+_nix_lib = "/run/current-system/sw/share/nix-ld/lib"
+if os.path.isdir(_nix_lib):
+    _curr_ld = os.environ.get("LD_LIBRARY_PATH", "")
+    if _nix_lib not in _curr_ld:
+        os.environ["LD_LIBRARY_PATH"] = f"{_nix_lib}:{_curr_ld}".rstrip(":")
+
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox
@@ -122,14 +129,14 @@ __all__ = [
 
 APP_NAME = "Sortwise"
 WINDOW_TITLE = "Sortwise - Calibrated Document Router"
-WINDOW_SIZE = (1560, 1000)
-MIN_WINDOW_SIZE = (1280, 860)
+WINDOW_SIZE = (1600, 1020)
+MIN_WINDOW_SIZE = (1320, 880)
 
-SIDEBAR_WIDTH = 300
-SHELF_HEIGHT = 178
-LEDGER_HEIGHT = 232
-INSPECTOR_WIDTH = 428
-BULK_HEIGHT = 54
+SIDEBAR_WIDTH = 320
+SHELF_HEIGHT = 196
+LEDGER_HEIGHT = 240
+INSPECTOR_WIDTH = 440
+BULK_HEIGHT = 58
 
 # Sentinel shown in the subject override menu when the calibrated prediction
 # should be trusted instead of a manual choice.
@@ -162,19 +169,54 @@ class Theme:
     TEXT_FAINT = "#5f6775"
 
     # Typography scale (points).  The whole UI reads its sizes from here so the
-    # scale can be raised or lowered in one place.  Base body text is 14pt,
-    # headers 18-22pt, section labels 15-16pt.
-    FONT_HEADER = 20        # window / pane headers
-    FONT_HEADER_SMALL = 18  # secondary headers (ledger, inspector)
-    FONT_SUBHEADER = 16     # storage block title
-    FONT_SECTION = 15       # small-caps section labels
-    FONT_BASE = 14          # body / navigation text
-    FONT_TABLE = 14         # table rows
-    FONT_PILL = 13          # pill + badge labels
-    FONT_BUTTON = 14        # action buttons
-    FONT_MONO = 13          # telemetry / monospace
-    FONT_MONO_SMALL = 12    # dense monospace
-    FONT_HINT = 12          # helper / muted copy
+    # scale can be raised or lowered in one place.  Base body text is 15pt,
+    # headers 20-24pt, section labels 16pt.
+    FONT_HEADER = 24        # window / pane headers
+    FONT_HEADER_SMALL = 20  # secondary headers (ledger, inspector)
+    FONT_SUBHEADER = 18     # storage block title
+    FONT_SECTION = 16       # small-caps section labels
+    FONT_BASE = 15          # body / navigation text
+    FONT_TABLE = 15         # table rows
+    FONT_PILL = 14          # pill + badge labels
+    FONT_BUTTON = 15        # action buttons
+    FONT_MONO = 14          # telemetry / monospace
+    FONT_MONO_SMALL = 13    # dense monospace
+    FONT_HINT = 13          # helper / muted copy
+
+    # Active resolved font families (cached once resolved)
+    FONT_FAMILY_UI: str | None = None
+    FONT_FAMILY_MONO: str | None = None
+
+    @classmethod
+    def resolve_fonts(cls, root: tk.Misc | None = None) -> tuple[str | None, str | None]:
+        if cls.FONT_FAMILY_UI is None:
+            cls.FONT_FAMILY_UI = pick_font_family(root, UI_FONT_CANDIDATES)
+        if cls.FONT_FAMILY_MONO is None:
+            cls.FONT_FAMILY_MONO = pick_font_family(root, MONO_FONT_CANDIDATES)
+        if cls.FONT_FAMILY_UI:
+            for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkTooltipFont"):
+                try:
+                    tkfont.nametofont(name).configure(family=cls.FONT_FAMILY_UI)
+                except Exception:
+                    pass
+        if cls.FONT_FAMILY_MONO:
+            try:
+                tkfont.nametofont("TkFixedFont").configure(family=cls.FONT_FAMILY_MONO)
+            except Exception:
+                pass
+        return cls.FONT_FAMILY_UI, cls.FONT_FAMILY_MONO
+
+    @classmethod
+    def ui_font(cls, size: int, weight: str = "normal") -> ctk.CTkFont:
+        if cls.FONT_FAMILY_UI:
+            return ctk.CTkFont(family=cls.FONT_FAMILY_UI, size=size, weight=weight)
+        return ctk.CTkFont(size=size, weight=weight)
+
+    @classmethod
+    def mono_font(cls, size: int, weight: str = "normal") -> ctk.CTkFont:
+        if cls.FONT_FAMILY_MONO:
+            return ctk.CTkFont(family=cls.FONT_FAMILY_MONO, size=size, weight=weight)
+        return cls.ui_font(size, weight)
 
     # Functional tints
     ACCENT = "#3b82f6"
@@ -232,38 +274,42 @@ def readable_on(color: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Font resolution -- never assume a family exists on the host
+# Font resolution -- prioritize installed modern vector outline fonts
 # --------------------------------------------------------------------------- #
 UI_FONT_CANDIDATES: tuple[str, ...] = (
-    "Inter",
-    "IBM Plex Sans",
     "Noto Sans",
-    "Open Sans",
-    "Cantarell",
-    "Ubuntu",
     "DejaVu Sans",
     "Liberation Sans",
+    "FreeSans",
+    "Inter",
+    "IBM Plex Sans",
+    "Ubuntu",
+    "Cantarell",
+    "Open Sans",
 )
 MONO_FONT_CANDIDATES: tuple[str, ...] = (
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Noto Sans Mono",
     "JetBrains Mono",
     "IBM Plex Mono",
-    "Noto Sans Mono",
-    "DejaVu Sans Mono",
     "Hack",
-    "Liberation Mono",
     "monospace",
 )
 
 
-def pick_font_family(widget: tk.Misc, candidates: Sequence[str]) -> str | None:
+def pick_font_family(widget: tk.Misc | None, candidates: Sequence[str]) -> str | None:
     """Return the first installed family from ``candidates`` (or ``None``)."""
     try:
-        available = {name.casefold() for name in tkfont.families(widget)}
+        if widget is not None:
+            available = {name.casefold(): name for name in tkfont.families(widget)}
+        else:
+            available = {name.casefold(): name for name in tkfont.families()}
     except Exception:  # pragma: no cover - defensive, Tk should be up
         return None
     for candidate in candidates:
         if candidate.casefold() in available:
-            return candidate
+            return available[candidate.casefold()]
     return None
 
 
@@ -358,12 +404,12 @@ NAV_ITEMS: tuple[tuple[str, str, str], ...] = (
 )
 
 COLUMNS = (
-    ("arrow", 34, 0),
-    ("icon", 42, 0),
-    ("name", 264, 1),
-    ("size", 112, 0),
-    ("pill", 184, 0),
-    ("status", 128, 0),
+    ("arrow", 38, 0),
+    ("icon", 52, 0),
+    ("name", 280, 1),
+    ("size", 120, 0),
+    ("pill", 196, 0),
+    ("status", 140, 0),
 )
 
 
@@ -680,7 +726,7 @@ class PillBar(tk.Canvas):
     """
 
     def __init__(self, master: tk.Misc, theme: type[Theme] = Theme,
-                 width: int = 156, height: int = 22, bg: str | None = None,
+                 width: int = 180, height: int = 26, bg: str | None = None,
                  font: tuple | None = None, **kwargs: Any) -> None:
         super().__init__(
             master,
@@ -695,7 +741,8 @@ class PillBar(tk.Canvas):
         self._width = int(width)
         self._height = int(height)
         self._radius = self._height / 2.0
-        self._font = font or ("TkDefaultFont", 10, "bold")
+        family = theme.FONT_FAMILY_UI or "TkDefaultFont"
+        self._font = font or (family, theme.FONT_PILL, "bold")
         self._track = rounded_rect(
             self, 1, 1, self._width - 1, self._height - 1, self._radius,
             fill=theme.BORDER, outline="",
@@ -764,14 +811,14 @@ class SettingsDialog(ctk.CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         ctk.CTkLabel(
-            self, text="ROUTER SETTINGS", font=ctk.CTkFont(size=theme.FONT_HEADER_SMALL, weight="bold"),
+            self, text="ROUTER SETTINGS", font=theme.ui_font(theme.FONT_HEADER_SMALL, "bold"),
             text_color=theme.TEXT, anchor="w",
         ).pack(fill="x", padx=26, pady=(24, 6))
         ctk.CTkLabel(
             self,
             text="Where documents are collected from, where they are filed, and how\n"
                  "confident the router must be before it acts on its own.",
-            font=ctk.CTkFont(size=theme.FONT_BASE), text_color=theme.TEXT_FAINT,
+            font=theme.ui_font(theme.FONT_BASE), text_color=theme.TEXT_FAINT,
             justify="left", anchor="w",
         ).pack(fill="x", padx=26, pady=(0, 18))
 
@@ -798,7 +845,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self._auto_move = ctk.CTkSwitch(
             body, text="Move files automatically once a decision is confident",
-            font=ctk.CTkFont(size=theme.FONT_BASE), text_color=theme.TEXT_MUTED,
+            font=theme.ui_font(theme.FONT_BASE), text_color=theme.TEXT_MUTED,
             fg_color=theme.BORDER_STRONG, progress_color=theme.ACCENT,
             button_color=theme.TEXT, button_hover_color=theme.TEXT, width=520,
         )
@@ -808,7 +855,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self._recursive = ctk.CTkSwitch(
             body, text="Scan the watch folder recursively",
-            font=ctk.CTkFont(size=theme.FONT_BASE), text_color=theme.TEXT_MUTED,
+            font=theme.ui_font(theme.FONT_BASE), text_color=theme.TEXT_MUTED,
             fg_color=theme.BORDER_STRONG, progress_color=theme.ACCENT,
             button_color=theme.TEXT, button_hover_color=theme.TEXT, width=520,
         )
@@ -822,12 +869,12 @@ class SettingsDialog(ctk.CTkToplevel):
             actions, text="Cancel", width=140, height=44, corner_radius=theme.RADIUS_SMALL,
             fg_color=theme.ELEVATED, hover_color=theme.HOVER, border_width=1,
             border_color=theme.BORDER, text_color=theme.TEXT_MUTED,
-            font=ctk.CTkFont(size=theme.FONT_BUTTON), command=self.destroy,
+            font=theme.ui_font(theme.FONT_BUTTON), command=self.destroy,
         ).pack(side="right", padx=(12, 0))
         ctk.CTkButton(
             actions, text="Save settings", width=180, height=44, corner_radius=theme.RADIUS_SMALL,
             fg_color=theme.ACCENT, hover_color=theme.ACCENT_DEEP, text_color="#ffffff",
-            font=ctk.CTkFont(size=theme.FONT_BUTTON, weight="bold"), command=self._save,
+            font=theme.ui_font(theme.FONT_BUTTON, "bold"), command=self._save,
         ).pack(side="right")
 
         self.after(60, self._grab)
@@ -840,14 +887,14 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def _path_row(self, parent: ctk.CTkFrame, row: int, label: str, value: str) -> ctk.CTkEntry:
         ctk.CTkLabel(
-            parent, text=label, font=ctk.CTkFont(size=self._theme.FONT_SECTION, weight="bold"),
+            parent, text=label, font=self._theme.ui_font(self._theme.FONT_SECTION, "bold"),
             text_color=self._theme.TEXT_FAINT, anchor="w",
         ).grid(row=row, column=0, columnspan=2, sticky="w", padx=20, pady=(20, 6))
 
         entry = ctk.CTkEntry(
             parent, height=44, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.BG, border_color=self._theme.BORDER,
-            text_color=self._theme.TEXT, font=ctk.CTkFont(size=self._theme.FONT_BASE),
+            text_color=self._theme.TEXT, font=self._theme.ui_font(self._theme.FONT_BASE),
         )
         entry.insert(0, value)
         entry.grid(row=row + 1, column=0, sticky="ew", padx=(20, 10), pady=(0, 2))
@@ -855,7 +902,7 @@ class SettingsDialog(ctk.CTkToplevel):
             parent, text="Browse", width=104, height=44, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ELEVATED, hover_color=self._theme.HOVER, border_width=1,
             border_color=self._theme.BORDER, text_color=self._theme.TEXT_MUTED,
-            font=ctk.CTkFont(size=self._theme.FONT_BASE), command=lambda: self._browse(entry),
+            font=self._theme.ui_font(self._theme.FONT_BASE), command=lambda: self._browse(entry),
         ).grid(row=row + 1, column=1, sticky="e", padx=(0, 20), pady=(0, 2))
         return entry
 
@@ -937,17 +984,18 @@ class ScanSetupDialog(ctk.CTkToplevel):
         self.configure(fg_color=theme.BG)
         self.transient(master)
         self.protocol("WM_DELETE_WINDOW", self._skip)
+        self._icons = Icons(theme=theme)
 
         ctk.CTkLabel(
             self, text="SCAN FOR DOCUMENTS",
-            font=ctk.CTkFont(size=theme.FONT_HEADER, weight="bold"),
+            font=theme.ui_font(theme.FONT_HEADER, "bold"),
             text_color=theme.TEXT, anchor="w",
         ).pack(fill="x", padx=28, pady=(26, 4))
         ctk.CTkLabel(
             self,
             text="Sortwise walks the tree on a worker-thread pool, skips system and cache\n"
                  "folders, and rates every document it finds as CONFIDENT or REVIEW.",
-            font=ctk.CTkFont(size=theme.FONT_BASE), text_color=theme.TEXT_FAINT,
+            font=theme.ui_font(theme.FONT_BASE), text_color=theme.TEXT_FAINT,
             justify="left", anchor="w",
         ).pack(fill="x", padx=28, pady=(0, 18))
 
@@ -964,7 +1012,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
         footer.pack(fill="x", padx=28, pady=(0, 24))
         self._recursive = ctk.CTkSwitch(
             footer, text="Scan sub-folders recursively",
-            font=ctk.CTkFont(size=theme.FONT_BASE), text_color=theme.TEXT_MUTED,
+            font=theme.ui_font(theme.FONT_BASE), text_color=theme.TEXT_MUTED,
             fg_color=theme.BORDER_STRONG, progress_color=theme.ACCENT,
             button_color=theme.TEXT, button_hover_color=theme.TEXT, width=360,
         )
@@ -974,7 +1022,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
             footer, text="Skip for now", width=170, height=46,
             corner_radius=theme.RADIUS_SMALL, fg_color=theme.ELEVATED,
             hover_color=theme.HOVER, border_width=1, border_color=theme.BORDER,
-            text_color=theme.TEXT_MUTED, font=ctk.CTkFont(size=theme.FONT_BUTTON),
+            text_color=theme.TEXT_MUTED, font=theme.ui_font(theme.FONT_BUTTON),
             command=self._skip,
         ).pack(side="right")
 
@@ -990,14 +1038,20 @@ class ScanSetupDialog(ctk.CTkToplevel):
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
+        hdr = ctk.CTkFrame(card, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=22, pady=(20, 2))
+        f_icon = self._icons.image("folder-documents.png", 32)
+        if f_icon:
+            ctk.CTkLabel(hdr, image=f_icon, text="").pack(side="left", padx=(0, 10))
         ctk.CTkLabel(
-            card, text="Mode A - Scan a folder",
-            font=ctk.CTkFont(size=theme.FONT_HEADER_SMALL, weight="bold"),
+            hdr, text="Mode A - Scan a folder",
+            font=theme.ui_font(theme.FONT_HEADER_SMALL, "bold"),
             text_color=theme.TEXT, anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=22, pady=(20, 2))
+        ).pack(side="left")
+
         ctk.CTkLabel(
             card, text="Point Sortwise at Downloads, Documents or any directory.",
-            font=ctk.CTkFont(size=theme.FONT_HINT), text_color=theme.TEXT_FAINT,
+            font=theme.ui_font(theme.FONT_HINT), text_color=theme.TEXT_FAINT,
             anchor="w", justify="left", wraplength=380,
         ).grid(row=1, column=0, sticky="w", padx=22, pady=(0, 14))
 
@@ -1011,7 +1065,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
                 preset_row, text=label, width=176, height=40,
                 corner_radius=theme.RADIUS_SMALL, fg_color=theme.ELEVATED,
                 hover_color=theme.HOVER, border_width=1, border_color=theme.BORDER,
-                text_color=theme.TEXT_MUTED, font=ctk.CTkFont(size=theme.FONT_BASE),
+                text_color=theme.TEXT_MUTED, font=theme.ui_font(theme.FONT_BASE),
                 command=lambda p=path: self._choose(p),
             ).grid(row=row, column=column, padx=4, pady=4, sticky="w")
 
@@ -1019,7 +1073,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
             card, height=44, corner_radius=theme.RADIUS_SMALL,
             fg_color=theme.BG, border_color=theme.BORDER,
             text_color=theme.TEXT, placeholder_text="Folder to scan",
-            font=ctk.CTkFont(size=theme.FONT_BASE),
+            font=theme.ui_font(theme.FONT_BASE),
         )
         entry.grid(row=3, column=0, sticky="ew", padx=22, pady=(4, 8))
         entry.insert(0, default_folder or (presets[0][1] if presets else str(self._home)))
@@ -1030,7 +1084,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
             browse, text="Browse...", width=130, height=42,
             corner_radius=theme.RADIUS_SMALL, fg_color=theme.ELEVATED,
             hover_color=theme.HOVER, border_width=1, border_color=theme.BORDER,
-            text_color=theme.TEXT_MUTED, font=ctk.CTkFont(size=theme.FONT_BUTTON),
+            text_color=theme.TEXT_MUTED, font=theme.ui_font(theme.FONT_BUTTON),
             command=lambda: self._browse(entry),
         ).pack(side="left")
 
@@ -1038,7 +1092,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
             card, text="Scan this folder", height=46,
             corner_radius=theme.RADIUS_SMALL, fg_color=theme.ACCENT_DEEP,
             hover_color=theme.ACCENT, text_color="#ffffff",
-            font=ctk.CTkFont(size=theme.FONT_BUTTON, weight="bold"),
+            font=theme.ui_font(theme.FONT_BUTTON, "bold"),
             command=lambda: self._start("folder", entry),
         ).grid(row=5, column=0, sticky="ew", padx=22, pady=(4, 20))
         return entry
@@ -1052,15 +1106,21 @@ class ScanSetupDialog(ctk.CTkToplevel):
         card.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         card.grid_columnconfigure(0, weight=1)
 
+        hdr = ctk.CTkFrame(card, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=22, pady=(20, 2))
+        d_icon = self._icons.image("disk.png", 32)
+        if d_icon:
+            ctk.CTkLabel(hdr, image=d_icon, text="").pack(side="left", padx=(0, 10))
         ctk.CTkLabel(
-            card, text="Mode B - Deep system scan",
-            font=ctk.CTkFont(size=theme.FONT_HEADER_SMALL, weight="bold"),
+            hdr, text="Mode B - Deep system scan",
+            font=theme.ui_font(theme.FONT_HEADER_SMALL, "bold"),
             text_color=theme.TEXT, anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=22, pady=(20, 2))
+        ).pack(side="left")
+
         ctk.CTkLabel(
             card,
             text="High-throughput multi-threaded walk for unorganised study documents.",
-            font=ctk.CTkFont(size=theme.FONT_HINT), text_color=theme.TEXT_FAINT,
+            font=theme.ui_font(theme.FONT_HINT), text_color=theme.TEXT_FAINT,
             anchor="w", justify="left", wraplength=380,
         ).grid(row=1, column=0, sticky="w", padx=22, pady=(0, 10))
 
@@ -1085,7 +1145,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
             target_frame, text="User Home (~)", height=38,
             corner_radius=theme.RADIUS_SMALL, fg_color=theme.ACCENT,
             hover_color=theme.ACCENT_DEEP, text_color="#ffffff",
-            font=ctk.CTkFont(size=theme.FONT_BASE, weight="bold"),
+            font=theme.ui_font(theme.FONT_BASE, "bold"),
             command=lambda: set_target("home"),
         )
         btn_home.grid(row=0, column=0, padx=(0, 6), sticky="ew")
@@ -1095,14 +1155,14 @@ class ScanSetupDialog(ctk.CTkToplevel):
             corner_radius=theme.RADIUS_SMALL, fg_color=theme.ELEVATED,
             hover_color=theme.HOVER, border_width=1, border_color=theme.BORDER,
             text_color=theme.TEXT_MUTED,
-            font=ctk.CTkFont(size=theme.FONT_BASE, weight="bold"),
+            font=theme.ui_font(theme.FONT_BASE, "bold"),
             command=lambda: set_target("os"),
         )
         btn_os.grid(row=0, column=1, padx=(6, 0), sticky="ew")
 
         self._deep_target_lbl = ctk.CTkLabel(
             card, text=f"Target: {self._home}",
-            font=ctk.CTkFont(size=theme.FONT_MONO), text_color=theme.TEXT_MUTED,
+            font=theme.mono_font(theme.FONT_MONO), text_color=theme.TEXT_MUTED,
             anchor="w", justify="left", wraplength=380,
         )
         self._deep_target_lbl.grid(row=3, column=0, sticky="w", padx=22, pady=(0, 8))
@@ -1110,7 +1170,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
         excludes = ctk.CTkLabel(
             card,
             text="Skips /proc  /sys  /dev  /nix/store  .git  node_modules  .cache",
-            font=ctk.CTkFont(size=theme.FONT_HINT), text_color=theme.TEXT_FAINT,
+            font=theme.ui_font(theme.FONT_HINT), text_color=theme.TEXT_FAINT,
             anchor="w", justify="left", wraplength=380,
         )
         excludes.grid(row=4, column=0, sticky="w", padx=22, pady=(0, 8))
@@ -1124,7 +1184,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
             start=5,
         ):
             ctk.CTkLabel(
-                card, text=f"• {line}", font=ctk.CTkFont(size=theme.FONT_HINT),
+                card, text=f"• {line}", font=theme.ui_font(theme.FONT_HINT),
                 text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=380,
             ).grid(row=row, column=0, sticky="w", padx=22, pady=2)
 
@@ -1132,7 +1192,7 @@ class ScanSetupDialog(ctk.CTkToplevel):
             card, text="Start deep scan", height=46,
             corner_radius=theme.RADIUS_SMALL, fg_color=theme.ACCENT,
             hover_color=theme.ACCENT_DEEP, text_color="#ffffff",
-            font=ctk.CTkFont(size=theme.FONT_BUTTON, weight="bold"),
+            font=theme.ui_font(theme.FONT_BUTTON, "bold"),
             command=lambda: self._start("deep", None),
         ).grid(row=9, column=0, sticky="ew", padx=22, pady=(16, 20), rowspan=1)
 
@@ -1203,12 +1263,12 @@ class ScanProgressDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             self, text="SCANNING DISK",
-            font=ctk.CTkFont(size=theme.FONT_HEADER, weight="bold"),
+            font=theme.ui_font(theme.FONT_HEADER, "bold"),
             text_color=theme.TEXT, anchor="w",
         ).pack(fill="x", padx=28, pady=(26, 2))
         where = " · ".join(roots) if roots else "the selected folders"
         self._roots = ctk.CTkLabel(
-            self, text=where, font=ctk.CTkFont(size=theme.FONT_MONO_SMALL),
+            self, text=where, font=theme.mono_font(theme.FONT_MONO_SMALL),
             text_color=theme.TEXT_FAINT, anchor="w", justify="left", wraplength=700,
         )
         self._roots.pack(fill="x", padx=28, pady=(0, 16))
@@ -1233,23 +1293,23 @@ class ScanProgressDialog(ctk.CTkToplevel):
             (("documents", "DOCUMENTS"), ("files", "FILES"), ("folders", "FOLDERS"))
         ):
             ctk.CTkLabel(
-                stats, text=caption, font=ctk.CTkFont(size=theme.FONT_MONO_SMALL, weight="bold"),
+                stats, text=caption, font=theme.mono_font(theme.FONT_MONO_SMALL, "bold"),
                 text_color=theme.TEXT_FAINT,
             ).grid(row=0, column=column, pady=(14, 0))
             value = ctk.CTkLabel(
-                stats, text="0", font=ctk.CTkFont(size=theme.FONT_HEADER_SMALL, weight="bold"),
+                stats, text="0", font=theme.ui_font(theme.FONT_HEADER_SMALL, "bold"),
                 text_color=theme.TEXT,
             )
             value.grid(row=1, column=column, pady=(0, 14))
             self._stat_labels[key] = value
 
         self._current = ctk.CTkLabel(
-            self, text="Starting…", font=ctk.CTkFont(size=theme.FONT_MONO),
+            self, text="Starting…", font=theme.mono_font(theme.FONT_MONO),
             text_color=theme.TEXT_MUTED, anchor="w", justify="left", wraplength=700,
         )
         self._current.pack(fill="x", padx=28, pady=(0, 6))
         self._elapsed = ctk.CTkLabel(
-            self, text="elapsed 0.0s", font=ctk.CTkFont(size=theme.FONT_MONO_SMALL),
+            self, text="elapsed 0.0s", font=theme.mono_font(theme.FONT_MONO_SMALL),
             text_color=theme.TEXT_FAINT, anchor="w",
         )
         self._elapsed.pack(fill="x", padx=28)
@@ -1258,7 +1318,7 @@ class ScanProgressDialog(ctk.CTkToplevel):
             self, text="Cancel scan", width=180, height=46,
             corner_radius=theme.RADIUS_SMALL, fg_color=theme.ELEVATED,
             hover_color=theme.HOVER, border_width=1, border_color=theme.BORDER,
-            text_color=theme.TEXT_MUTED, font=ctk.CTkFont(size=theme.FONT_BUTTON),
+            text_color=theme.TEXT_MUTED, font=theme.ui_font(theme.FONT_BUTTON),
             command=self.cancel,
         ).pack(pady=(14, 22))
 
@@ -1375,9 +1435,8 @@ class SortwiseApp(ctk.CTk):
         self._nav_badges: dict[str, ctk.CTkLabel] = {}
         self._ledger_rows: list[tk.Misc] = []
 
-        # Fonts
-        self._family_ui: str | None = pick_font_family(self, UI_FONT_CANDIDATES)
-        self._family_mono: str | None = pick_font_family(self, MONO_FONT_CANDIDATES)
+        # Fonts resolution & global Tk font configuration
+        self._family_ui, self._family_mono = theme.resolve_fonts(self)
 
         self.title(WINDOW_TITLE)
         self.geometry(f"{WINDOW_SIZE[0]}x{WINDOW_SIZE[1]}")
@@ -1421,14 +1480,10 @@ class SortwiseApp(ctk.CTk):
 
     # -- fonts ------------------------------------------------------------- #
     def _ui_font(self, size: int, weight: str = "normal") -> ctk.CTkFont:
-        if self._family_ui:
-            return ctk.CTkFont(family=self._family_ui, size=size, weight=weight)
-        return ctk.CTkFont(size=size, weight=weight)
+        return self._theme.ui_font(size, weight)
 
     def _mono_font(self, size: int, weight: str = "normal") -> ctk.CTkFont:
-        if self._family_mono:
-            return ctk.CTkFont(family=self._family_mono, size=size, weight=weight)
-        return self._ui_font(size, weight)
+        return self._theme.mono_font(size, weight)
 
     def _tk_font(self, size: int, weight: str = "normal") -> tuple:
         """A plain tuple font, for widgets drawn on a raw :class:`tk.Canvas`."""
@@ -1515,15 +1570,15 @@ class SortwiseApp(ctk.CTk):
         storage = self._card(side, fg_color=self._theme.SURFACE)
         storage.grid(row=1, column=0, sticky="ew", padx=14, pady=(10, 8))
         storage.grid_columnconfigure(1, weight=1)
-        disk = self._icon("disk.png", 42)
+        disk = self._icon("disk.png", 54)
         if disk is not None:
             ctk.CTkLabel(storage, image=disk, text="").grid(
-                row=0, column=0, rowspan=3, padx=(12, 12), pady=12
+                row=0, column=0, rowspan=3, padx=(14, 14), pady=12
             )
         else:
-            ctk.CTkLabel(storage, text="◍", font=self._ui_font(26, "bold"),
+            ctk.CTkLabel(storage, text="◍", font=self._ui_font(30, "bold"),
                          text_color=self._theme.ACCENT).grid(
-                row=0, column=0, rowspan=3, padx=(12, 12), pady=12
+                row=0, column=0, rowspan=3, padx=(14, 14), pady=12
             )
         ctk.CTkLabel(storage, text="Semester 3", font=self._ui_font(self._theme.FONT_SUBHEADER, "bold"),
                      text_color=self._theme.TEXT, anchor="w").grid(
@@ -1559,16 +1614,16 @@ class SortwiseApp(ctk.CTk):
     def _nav_row(self, parent: tk.Misc, row: int, view: str, label: str,
                  icon_name: str) -> ctk.CTkFrame:
         frame = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=self._theme.RADIUS_SMALL,
-                             height=48)
+                             height=52)
         frame.grid(row=row, column=0, sticky="ew", padx=10, pady=2)
         frame.grid_columnconfigure(2, weight=1)
         frame.grid_propagate(False)
 
-        bar = ctk.CTkFrame(frame, width=3, height=26, corner_radius=2,
+        bar = ctk.CTkFrame(frame, width=3, height=30, corner_radius=2,
                            fg_color="transparent")
         bar.grid(row=0, column=0, padx=(4, 8), pady=11)
 
-        icon = self._icon(icon_name, 22)
+        icon = self._icon(icon_name, 28)
         if icon is not None:
             ctk.CTkLabel(frame, image=icon, text="").grid(row=0, column=1, padx=(0, 10))
         else:
@@ -1579,9 +1634,9 @@ class SortwiseApp(ctk.CTk):
                      text_color=self._theme.TEXT_MUTED, anchor="w").grid(
             row=0, column=2, sticky="w")
         badge = ctk.CTkLabel(frame, text="0", font=self._mono_font(self._theme.FONT_MONO_SMALL, "bold"),
-                             text_color=self._theme.TEXT_MUTED, width=38,
+                             text_color=self._theme.TEXT_MUTED, width=42,
                              fg_color=self._theme.ELEVATED, corner_radius=6,
-                             height=26)
+                             height=28)
         badge.grid(row=0, column=3, padx=(6, 12))
         self._nav_badges[view] = badge
         frame._accent_bar = bar  # type: ignore[attr-defined]
@@ -1610,7 +1665,7 @@ class SortwiseApp(ctk.CTk):
 
         crumb = ctk.CTkFrame(bar, fg_color="transparent")
         crumb.grid(row=0, column=1, sticky="w", padx=6, pady=(12, 6))
-        disk = self._icon("disk.png", 20)
+        disk = self._icon("disk.png", 26)
         if disk is not None:
             ctk.CTkLabel(crumb, image=disk, text="").pack(side="left", padx=(0, 8))
         self._crumb_label = ctk.CTkLabel(
@@ -1701,11 +1756,11 @@ class SortwiseApp(ctk.CTk):
         frame.grid(row=0, column=column, sticky="nsew", padx=3, pady=2)
         frame.grid_columnconfigure(0, weight=1)
 
-        icon = self._icon(icon_name, 56)
+        icon = self._icon(icon_name, 68)
         if icon is not None:
-            ctk.CTkLabel(frame, image=icon, text="").grid(row=0, column=0, pady=(10, 2))
+            ctk.CTkLabel(frame, image=icon, text="").grid(row=0, column=0, pady=(12, 2))
         else:
-            ctk.CTkLabel(frame, text="📁", font=self._ui_font(30)).grid(row=0, column=0, pady=(10, 2))
+            ctk.CTkLabel(frame, text="📁", font=self._ui_font(34)).grid(row=0, column=0, pady=(12, 2))
 
         ctk.CTkLabel(frame, text=label, font=self._ui_font(self._theme.FONT_TABLE, "bold"),
                      text_color=self._theme.TEXT, wraplength=124, justify="center").grid(
@@ -1860,17 +1915,23 @@ class SortwiseApp(ctk.CTk):
         body.grid(row=1, column=0, sticky="nsew", padx=(6, 0), pady=(0, 10))
         body.grid_columnconfigure(0, weight=1)
 
+        doc_hdr = ctk.CTkFrame(body, fg_color="transparent")
+        doc_hdr.grid(row=0, column=0, sticky="ew", padx=(10, 12), pady=(6, 2))
+        doc_hdr.grid_columnconfigure(1, weight=1)
+        self._doc_icon_lbl = ctk.CTkLabel(doc_hdr, text="")
+        self._doc_icon_lbl.grid(row=0, column=0, rowspan=2, padx=(0, 10), sticky="nw")
+
         self._doc_name = ctk.CTkLabel(
-            body, text="No document selected", font=self._ui_font(self._theme.FONT_HEADER, "bold"),
-            text_color=self._theme.TEXT, anchor="w", justify="left", wraplength=368,
+            doc_hdr, text="No document selected", font=self._ui_font(self._theme.FONT_HEADER, "bold"),
+            text_color=self._theme.TEXT, anchor="w", justify="left", wraplength=330,
         )
-        self._doc_name.grid(row=0, column=0, sticky="ew", padx=(10, 12), pady=(6, 2))
+        self._doc_name.grid(row=0, column=1, sticky="ew")
         self._doc_path = ctk.CTkLabel(
-            body, text="Pick a folder or a document in the table to inspect it.",
+            doc_hdr, text="Pick a folder or a document in the table to inspect it.",
             font=self._mono_font(self._theme.FONT_MONO_SMALL), text_color=self._theme.TEXT_FAINT,
-            anchor="w", justify="left", wraplength=368,
+            anchor="w", justify="left", wraplength=330,
         )
-        self._doc_path.grid(row=1, column=0, sticky="ew", padx=(10, 12), pady=(0, 8))
+        self._doc_path.grid(row=1, column=1, sticky="ew")
 
         tags = ctk.CTkFrame(body, fg_color="transparent")
         tags.grid(row=2, column=0, sticky="w", padx=(10, 12))
@@ -2271,7 +2332,7 @@ class SortwiseApp(ctk.CTk):
             arrow.grid(row=0, column=0, padx=(indent, 0), pady=9)
 
         icon_name = self._item_icon(item)
-        icon = self._icon(icon_name, 26)
+        icon = self._icon(icon_name, 34)
         if icon is not None:
             ctk.CTkLabel(row, image=icon, text="").grid(row=0, column=1, padx=(2, 6))
         else:
@@ -2287,7 +2348,7 @@ class SortwiseApp(ctk.CTk):
                             text_color=self._theme.TEXT_MUTED, anchor="w")
         size.grid(row=0, column=3, sticky="w", padx=(0, 10))
 
-        pill = PillBar(row, theme=self._theme, width=176, height=26,
+        pill = PillBar(row, theme=self._theme, width=188, height=26,
                        bg=bg, font=self._tk_font(self._theme.FONT_PILL, "bold"))
         pill.grid(row=0, column=4, sticky="w", padx=(0, 10))
         confidence = item.confidence if item.confidence is not None else 0.0
@@ -2721,6 +2782,8 @@ class SortwiseApp(ctk.CTk):
 
     def _clear_inspector(self) -> None:
         self._doc_info = None
+        if hasattr(self, "_doc_icon_lbl"):
+            self._doc_icon_lbl.configure(image=None, text="")
         self._doc_name.configure(text="No document selected", text_color=self._theme.TEXT)
         self._doc_path.configure(text="Pick a folder or a document in the table to inspect it.")
         self._pill_format.configure(text="—")
@@ -2749,6 +2812,12 @@ class SortwiseApp(ctk.CTk):
 
     def _show_folder(self, item: DocItem) -> None:
         self._doc_info = None
+        if hasattr(self, "_doc_icon_lbl"):
+            folder_icon = self._icon(self._item_icon(item), 42)
+            if folder_icon:
+                self._doc_icon_lbl.configure(image=folder_icon, text="")
+            else:
+                self._doc_icon_lbl.configure(image=None, text="")
         self._doc_name.configure(text=item.label, text_color=self._theme.TEXT)
         self._doc_path.configure(text=item.path or "")
         children = len(item.children)
@@ -2786,6 +2855,12 @@ class SortwiseApp(ctk.CTk):
         info = inspect_document(item.path) if item.path else None
         self._doc_info = info
         title = (info or {}).get("title") or item.label
+        if hasattr(self, "_doc_icon_lbl"):
+            file_icon = self._icon(self._item_icon(item), 42)
+            if file_icon:
+                self._doc_icon_lbl.configure(image=file_icon, text="")
+            else:
+                self._doc_icon_lbl.configure(image=None, text="")
         self._doc_name.configure(text=title, text_color=self._theme.TEXT)
         self._doc_path.configure(text=item.path or item.label)
         self._pill_format.configure(text=(item.file_type or "?").upper())

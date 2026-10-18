@@ -13,7 +13,7 @@
 
 **Sortwise** is an intelligent, physical desktop application designed to discover, calibrate, classify, rename, and organize university course study materials (`.pdf`, `.docx`, `.pptx`).
 
-Unlike web or browser-based tools, Sortwise runs as a **100% physical native desktop window** on Linux (Wayland / X11) using **CustomTkinter** and vector-rendered Tk canvas widgets. It features a matte graphite monochrome aesthetic with subtle functional tints, large typography scale ($\ge 14\text{pt}$ body, $18\text{--}20\text{pt}$ headers), Papirus system icons, an in-flight renamer, and an undo ledger.
+Unlike web or browser-based tools, Sortwise runs as a **100% physical native desktop window** on Linux (Wayland / X11) using **CustomTkinter** and vector-rendered Tk canvas widgets. It features a matte graphite monochrome aesthetic with subtle functional tints, large anti-aliased typography scale ($15\text{pt}$ body, $20\text{--}24\text{pt}$ headers), high-resolution vector icons, an in-flight renamer, and an undo ledger.
 
 ### Key Capabilities
 
