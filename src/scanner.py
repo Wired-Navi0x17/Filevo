@@ -205,6 +205,7 @@ class ConfidenceRating:
     confidence: float
     entropy: float
     status: str
+    ranking: tuple[tuple[str, float], ...] = ()
 
     @property
     def confident(self) -> bool:
@@ -249,21 +250,23 @@ def rate_scores(
     """Turn raw keyword scores into a calibrated :class:`ConfidenceRating`."""
     labels = list(scores)
     if not labels:
-        return ConfidenceRating("", 0.0, 0.0, 0.0, STATUS_AMBIGUOUS)
+        return ConfidenceRating("", 0.0, 0.0, 0.0, STATUS_AMBIGUOUS, ())
 
     values = [float(scores[label]) for label in labels]
     probs = tempered_softmax(values, temperature)
-    order = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
+    order = sorted(range(len(values)), key=lambda i: probs[i], reverse=True)
     best = order[0]
     confidence = float(probs[best])
     entropy = shannon_entropy(probs)
     confident = confidence >= threshold and entropy < entropy_threshold
+    ranking = tuple((labels[i], float(probs[i])) for i in order)
     return ConfidenceRating(
         subject=labels[best],
         score=float(values[best]),
         confidence=confidence,
         entropy=entropy,
         status=STATUS_CONFIDENT if confident else STATUS_AMBIGUOUS,
+        ranking=ranking,
     )
 
 
@@ -323,6 +326,7 @@ class ScannedDocument:
     entropy: float
     status: str
     score: float = 0.0
+    ranking: tuple[tuple[str, float], ...] = ()
 
     @property
     def confident(self) -> bool:
@@ -553,6 +557,8 @@ class DiskScanner:
                 return
             try:
                 if entry.is_dir(follow_symlinks=False):
+                    if entry.name.startswith("."):
+                        continue
                     if not recursive:
                         continue
                     if max_depth is not None and depth >= max_depth:
@@ -593,6 +599,7 @@ class DiskScanner:
                         entropy=rating.entropy,
                         status=rating.status,
                         score=rating.score,
+                        ranking=rating.ranking,
                     )
                     with lock:
                         results.append(document)

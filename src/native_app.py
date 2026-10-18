@@ -57,12 +57,37 @@ import argparse
 import math
 import os
 import queue
+import subprocess
 import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
+
+
+def open_in_dolphin(target: str | Path | None = None) -> None:
+    """Open a file or directory in KDE Dolphin file manager.
+    
+    If given a file, Dolphin opens with --select to highlight it.
+    If given a directory, Dolphin opens that directory.
+    """
+    try:
+        p = Path(target).resolve() if target else Path.home()
+        if p.is_file():
+            subprocess.Popen(["dolphin", "--select", str(p)])
+        elif p.is_dir():
+            subprocess.Popen(["dolphin", str(p)])
+        elif p.parent.is_dir():
+            subprocess.Popen(["dolphin", str(p.parent)])
+        else:
+            subprocess.Popen(["dolphin", str(Path.home())])
+    except Exception:
+        try:
+            fallback = str(p if p.is_dir() else p.parent)
+            subprocess.Popen(["xdg-open", fallback])
+        except Exception:
+            pass
 
 # --------------------------------------------------------------------------- #
 # Path bootstrap: the app is launched as a script, so make ``src`` importable.
@@ -431,10 +456,12 @@ class DocItem:
     pending: bool = False                # in the intake folder, not yet routed
     modified: str = ""
     confidence: float | None = None
+    entropy: float | None = None
     status: str = ""                     # CONFIDENT | REVIEW
     exists: bool = True
     scan: bool = False                   # discovered by the disk scanner
     selected: bool = False               # ticked in the bulk-action toolbar
+    ranking: list[tuple[str, float]] = field(default_factory=list)
     children: list["DocItem"] = field(default_factory=list)
 
     @property
@@ -889,7 +916,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             parent, text=label, font=self._theme.ui_font(self._theme.FONT_SECTION, "bold"),
             text_color=self._theme.TEXT_FAINT, anchor="w",
-        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=20, pady=(20, 6))
+        ).grid(row=row, column=0, columnspan=2, sticky="w", padx=20, pady=(16, 4))
 
         entry = ctk.CTkEntry(
             parent, height=44, corner_radius=self._theme.RADIUS_SMALL,
@@ -898,12 +925,23 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         entry.insert(0, value)
         entry.grid(row=row + 1, column=0, sticky="ew", padx=(20, 10), pady=(0, 2))
+
+        btn_box = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_box.grid(row=row + 1, column=1, sticky="e", padx=(0, 20), pady=(0, 2))
+
         ctk.CTkButton(
-            parent, text="Browse", width=104, height=44, corner_radius=self._theme.RADIUS_SMALL,
+            btn_box, text="Open Dolphin", width=125, height=44, corner_radius=self._theme.RADIUS_SMALL,
+            fg_color=self._theme.ACCENT, hover_color=self._theme.ACCENT_DEEP, text_color="#ffffff",
+            font=self._theme.ui_font(self._theme.FONT_BASE, "bold"),
+            command=lambda: open_in_dolphin(entry.get().strip()),
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            btn_box, text="Pick...", width=80, height=44, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ELEVATED, hover_color=self._theme.HOVER, border_width=1,
             border_color=self._theme.BORDER, text_color=self._theme.TEXT_MUTED,
             font=self._theme.ui_font(self._theme.FONT_BASE), command=lambda: self._browse(entry),
-        ).grid(row=row + 1, column=1, sticky="e", padx=(0, 20), pady=(0, 2))
+        ).pack(side="left")
         return entry
 
     def _slider_row(
@@ -937,6 +975,7 @@ class SettingsDialog(ctk.CTkToplevel):
         if chosen:
             entry.delete(0, "end")
             entry.insert(0, chosen)
+            open_in_dolphin(chosen)
 
     def _save(self) -> None:
         changes = {
@@ -1507,11 +1546,10 @@ class SortwiseApp(ctk.CTk):
         main.grid(row=0, column=1, sticky="nsew", padx=(0, self._theme.PAD),
                   pady=self._theme.PAD)
         main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(3, weight=1)
+        main.grid_rowconfigure(2, weight=1)
         self._main = main
 
         self._build_topnav(main)
-        self._build_shelf(main)
         self._build_bulk_toolbar(main)
         self._build_content(main)
         self._build_ledger(main)
@@ -1581,9 +1619,11 @@ class SortwiseApp(ctk.CTk):
                          text_color=self._theme.ACCENT).grid(
                 row=0, column=0, rowspan=3, padx=(14, 14), pady=12
             )
-        ctk.CTkLabel(storage, text="Semester 3", font=self._ui_font(self._theme.FONT_SUBHEADER, "bold"),
-                     text_color=self._theme.TEXT, anchor="w").grid(
-            row=0, column=1, sticky="w", pady=(12, 0))
+        self._storage_title_label = ctk.CTkLabel(
+            storage, text="Library Storage", font=self._ui_font(self._theme.FONT_SUBHEADER, "bold"),
+            text_color=self._theme.TEXT, anchor="w"
+        )
+        self._storage_title_label.grid(row=0, column=1, sticky="w", pady=(12, 0))
         ctk.CTkLabel(storage, text="Target Storage", font=self._ui_font(self._theme.FONT_HINT),
                      text_color=self._theme.TEXT_FAINT, anchor="w").grid(
             row=1, column=1, sticky="w")
@@ -1670,7 +1710,7 @@ class SortwiseApp(ctk.CTk):
         if disk is not None:
             ctk.CTkLabel(crumb, image=disk, text="").pack(side="left", padx=(0, 8))
         self._crumb_label = ctk.CTkLabel(
-            crumb, text="> Home > Semester 3", font=self._mono_font(self._theme.FONT_MONO),
+            crumb, text="> Home > Library", font=self._mono_font(self._theme.FONT_MONO),
             text_color=self._theme.TEXT_MUTED, anchor="w",
         )
         self._crumb_label.pack(side="left")
@@ -1686,11 +1726,11 @@ class SortwiseApp(ctk.CTk):
 
         actions = ctk.CTkFrame(bar, fg_color="transparent")
         actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
-        self._pick_folder_button = self._action_button(actions, "Choose Folder...", self.pick_custom_folder, accent=False)
-        self._pick_file_button = self._action_button(actions, "Choose File...", self.pick_custom_file, accent=False)
-        self._scan_disk_button = self._action_button(actions, "Scan Disk", self.open_scan_dialog)
-        self._scan_button = self._action_button(actions, "Scan Watch Dir", self.scan_watch_dir)
-        self._auto_button = self._action_button(actions, "Auto-Route Confident", self.auto_route_confident)
+        self._settings_button = self._action_button(actions, "⚙ Setup & Paths", self.open_settings, accent=False)
+        self._dolphin_button = self._action_button(actions, "📂 Open in Dolphin", self.open_active_in_dolphin, accent=False)
+        self._pick_file_button = self._action_button(actions, "Choose File", self.pick_custom_file, accent=False)
+        self._scan_disk_button = self._action_button(actions, "🔍 Fast Scan", self.start_disk_scan, accent=True)
+        self._auto_button = self._action_button(actions, "⚡ Auto-Route", self.auto_route_confident, accent=False)
         
         # Segmented Copy vs Cut Mode toggle
         mode_frame = ctk.CTkFrame(actions, fg_color=self._theme.SURFACE, corner_radius=self._theme.RADIUS_SMALL,
@@ -1711,8 +1751,7 @@ class SortwiseApp(ctk.CTk):
         )
         self._btn_mode_copy.pack(side="left", padx=2, pady=2)
 
-        self._undo_button = self._action_button(actions, "Undo Last", self.undo_last, accent=False)
-        self._settings_button = self._action_button(actions, "Settings", self.open_settings, accent=False)
+        self._undo_button = self._action_button(actions, "↩ Undo", self.undo_last, accent=False)
 
         self._mode_label = ctk.CTkLabel(actions, text="", font=self._mono_font(self._theme.FONT_MONO_SMALL),
                                         text_color=self._theme.TEXT_FAINT)
@@ -1816,7 +1855,7 @@ class SortwiseApp(ctk.CTk):
     # -- bulk action toolbar (BCUninstaller-style) ------------------------- #
     def _build_bulk_toolbar(self, parent: tk.Misc) -> None:
         bar = self._card(parent, height=BULK_HEIGHT)
-        bar.grid(row=2, column=0, sticky="ew", pady=(0, self._theme.GAP))
+        bar.grid(row=1, column=0, sticky="ew", pady=(0, self._theme.GAP))
         bar.grid_propagate(False)
         bar.grid_columnconfigure(2, weight=1)
         self._bulk_bar = bar
@@ -1876,7 +1915,7 @@ class SortwiseApp(ctk.CTk):
     # -- content: table + inspector ---------------------------------------- #
     def _build_content(self, parent: tk.Misc) -> None:
         content = ctk.CTkFrame(parent, fg_color="transparent")
-        content.grid(row=3, column=0, sticky="nsew", pady=(0, self._theme.GAP))
+        content.grid(row=2, column=0, sticky="nsew", pady=(0, self._theme.GAP))
         content.grid_columnconfigure(0, weight=1)
         content.grid_columnconfigure(1, weight=0, minsize=INSPECTOR_WIDTH)
         content.grid_rowconfigure(0, weight=1)
@@ -1961,6 +2000,13 @@ class SortwiseApp(ctk.CTk):
         self._pill_format = self._pill(tags, "—")
         self._pill_size = self._pill(tags, "—")
         self._pill_pages = self._pill(tags, "—")
+        self._btn_dolphin_item = ctk.CTkButton(
+            tags, text="📂 Dolphin", width=100, height=32, corner_radius=6,
+            fg_color=self._theme.ACCENT, hover_color=self._theme.ACCENT_DEEP, text_color="#ffffff",
+            font=self._ui_font(self._theme.FONT_HINT, "bold"),
+            command=self.open_selected_in_dolphin,
+        )
+        self._btn_dolphin_item.pack(side="left", padx=(4, 0))
 
         self._section_label(body, "SUBJECT MATCH").grid(
             row=3, column=0, sticky="w", padx=(10, 12), pady=(12, 4))
@@ -2000,34 +2046,32 @@ class SortwiseApp(ctk.CTk):
         confidence_row = ctk.CTkFrame(body, fg_color="transparent")
         confidence_row.grid(row=6, column=0, sticky="ew", padx=(10, 12), pady=(12, 0))
         confidence_row.grid_columnconfigure(0, weight=1)
-        self._section_label(confidence_row, "CONFIDENCE", anchor="w").grid(row=0, column=0, sticky="w")
-        self._confidence_label = ctk.CTkLabel(confidence_row, text="—",
-                                              font=self._mono_font(self._theme.FONT_MONO, "bold"),
-                                              text_color=self._theme.TEXT, anchor="e")
-        self._confidence_label.grid(row=0, column=1, sticky="e")
-        self._confidence_bar = ctk.CTkProgressBar(
-            body, height=8, corner_radius=4, fg_color=self._theme.BG,
-            progress_color=self._theme.ACCENT,
-        )
-        self._confidence_bar.set(0.0)
-        self._confidence_bar.grid(row=7, column=0, sticky="ew", padx=(10, 12), pady=(6, 8))
+        self._section_label(confidence_row, "AI PROBABILITY BREAKDOWN (RLCD)", anchor="w").grid(row=0, column=0, sticky="w")
+
+        prob_card = ctk.CTkFrame(body, fg_color=self._theme.SURFACE, corner_radius=self._theme.RADIUS_SMALL,
+                                 border_width=1, border_color=self._theme.BORDER)
+        prob_card.grid(row=7, column=0, sticky="ew", padx=(10, 12), pady=(6, 4))
+        prob_card.grid_columnconfigure(0, weight=1)
+        self._prob_container = prob_card
 
         metrics = ctk.CTkFrame(body, fg_color="transparent")
-        metrics.grid(row=8, column=0, sticky="ew", padx=(10, 12))
+        metrics.grid(row=8, column=0, sticky="ew", padx=(10, 12), pady=(4, 0))
         metrics.grid_columnconfigure(0, weight=1)
         self._entropy_label = ctk.CTkLabel(
-            metrics, text="Shannon entropy  — bits", font=self._mono_font(self._theme.FONT_MONO_SMALL),
+            metrics, text="Shannon entropy: — bits", font=self._mono_font(self._theme.FONT_MONO_SMALL),
             text_color=self._theme.TEXT_MUTED, anchor="w",
         )
         self._entropy_label.grid(row=0, column=0, sticky="w")
-        self._gate_label = ctk.CTkLabel(metrics, text="", font=self._mono_font(self._theme.FONT_MONO_SMALL),
+        self._gate_label = ctk.CTkLabel(metrics, text="", font=self._mono_font(self._theme.FONT_MONO_SMALL, "bold"),
                                         text_color=self._theme.TEXT_FAINT, anchor="e")
         self._gate_label.grid(row=0, column=1, sticky="e")
-        self._ranking_label = ctk.CTkLabel(
-            body, text="", font=self._mono_font(self._theme.FONT_MONO_SMALL), text_color=self._theme.TEXT_FAINT,
+
+        self._gate_explanation = ctk.CTkLabel(
+            body, text="Risk-Limiting Gate: Automate if Confidence ≥ 85% & Entropy < 1.0b",
+            font=self._ui_font(self._theme.FONT_HINT), text_color=self._theme.TEXT_FAINT,
             anchor="w", justify="left", wraplength=368,
         )
-        self._ranking_label.grid(row=9, column=0, sticky="ew", padx=(10, 12), pady=(6, 0))
+        self._gate_explanation.grid(row=9, column=0, sticky="ew", padx=(10, 12), pady=(2, 6))
 
         ctk.CTkFrame(body, height=1, fg_color=self._theme.BORDER).grid(
             row=10, column=0, sticky="ew", padx=(10, 12), pady=10)
@@ -2082,7 +2126,7 @@ class SortwiseApp(ctk.CTk):
     # -- activity ledger --------------------------------------------------- #
     def _build_ledger(self, parent: tk.Misc) -> None:
         card = self._card(parent, height=LEDGER_HEIGHT)
-        card.grid(row=4, column=0, sticky="ew")
+        card.grid(row=3, column=0, sticky="ew")
         card.grid_propagate(False)
         card.grid_columnconfigure(0, weight=1)
         card.grid_rowconfigure(1, weight=1)
@@ -2177,20 +2221,21 @@ class SortwiseApp(ctk.CTk):
         return next((item for item in self._tree if item.card == key), None)
 
     def _update_crumbs(self) -> None:
-        parts = ["Home", "Semester 3"]
+        target_name = Path(self._config_store.load().target_root).name or "Library"
+        parts = ["Home", target_name]
         mode, key = self._view
         if mode == "card" and key:
             node = self._top_by_card(key)
             if node is not None:
                 parts.append(node.label)
         elif mode == "downloads":
-            parts.append("Downloads")
+            parts.append("Intake")
         elif mode == "subjects":
-            parts.append("Subjects")
+            parts.append("Categories")
         elif mode == "review":
             parts.append("Review Queue")
         elif mode == SCAN_MODE:
-            parts.append("Scan Results")
+            parts.append("Disk Scan Results")
         self._crumb_label.configure(text=" > ".join(parts))
 
     def _update_mode_label(self) -> None:
@@ -2480,53 +2525,83 @@ class SortwiseApp(ctk.CTk):
             busy_text="Scanning folders…",
         )
 
-    def open_scan_dialog(self) -> None:
-        """Open the Mode A (folder) vs Mode B (deep disk/OS) chooser dialog."""
+    def open_active_in_dolphin(self) -> None:
+        """Open the active library or watch folder in KDE Dolphin."""
+        if self._selected and self._selected.path:
+            open_in_dolphin(self._selected.path)
+            return
         config = self._config_store.load()
-        ScanSetupDialog(
-            self,
-            theme=self._theme,
-            on_start=self._on_start_scan,
-            on_skip=None,
-            home=Path.home(),
-            default_folder=config.watch_folder,
-        )
+        target = config.target_root if Path(config.target_root).is_dir() else config.watch_folder
+        open_in_dolphin(target)
 
-    def _on_start_scan(self, mode: str, roots: list[str], recursive: bool) -> None:
-        self.start_disk_scan(roots=roots, recursive=recursive, mode=mode)
+    def open_selected_in_dolphin(self) -> None:
+        """Reveal the currently selected document or folder in KDE Dolphin."""
+        if self._selected and self._selected.path:
+            open_in_dolphin(self._selected.path)
+        else:
+            self.open_active_in_dolphin()
+
+    def start_fast_scan(self) -> None:
+        """Alias for start_disk_scan."""
+        self.start_disk_scan()
+
+    def open_scan_dialog(self) -> None:
+        """Inline fast scan without opening any separate window."""
+        self.start_disk_scan()
 
     def start_deep_scan(self) -> None:
-        self.start_disk_scan(roots=[str(Path.home())], recursive=True, mode="deep")
+        """Inline fast scan without opening any separate window."""
+        self.start_disk_scan()
 
     def start_disk_scan(
         self,
-        roots: Sequence[str],
+        roots: Sequence[str] | None = None,
         recursive: bool = True,
         mode: str = "folder",
     ) -> None:
+        """Scan documents inline directly in the main window (zero popup dialogs)."""
         if self._scan_running:
             self._set_status("Scan is already running", tone="warn")
             return
+
+        config = self._config_store.load()
+        if not roots:
+            candidates = [config.watch_folder]
+            for p in (Path.home() / "Downloads", Path.home() / "Documents", Path.home() / "Desktop"):
+                if p.is_dir() and str(p) not in candidates:
+                    candidates.append(str(p))
+            roots = candidates
+
         self._scan_running = True
         self._scan_cancel = threading.Event()
-        dialog = ScanProgressDialog(
-            self,
-            theme=self._theme,
-            on_cancel=self._scan_cancel.set,
-            roots=roots,
-        )
-        self._scan_dialog = dialog
-        self._set_busy(True, "Scanning disk…")
+
+        # Display progress directly in the main window bulk toolbar - NO SEPARATE WINDOW
+        self._show_bulk_bar(True)
+        if hasattr(self, "_bulk_confident"):
+            self._bulk_confident.grid_remove()
+        if hasattr(self, "_batch_button"):
+            self._batch_button.configure(
+                text="Cancel Scan", command=self.cancel_disk_scan,
+                fg_color=self._theme.WARN, hover_color="#dc2626", text_color="#ffffff"
+            )
+        self._bulk_summary.configure(text=f"Scanning documents in {len(roots)} location(s)...")
+        self._batch_progress.configure(mode="indeterminate")
+        try:
+            self._batch_progress.start()
+        except Exception:
+            pass
+        self._set_busy(True, "Scanning documents inline…")
 
         def worker() -> list[ScannedDocument]:
             scanner = DiskScanner(workers=default_workers(), progress_interval=0.08)
 
             def on_progress(snapshot: ScanProgress) -> None:
-                self._events.put((dialog.update_progress, (snapshot,)))
+                self._events.put((self._update_inline_scan_progress, (snapshot,)))
 
             return scanner.scan(
                 roots,
                 recursive=recursive,
+                max_depth=4,
                 on_progress=on_progress,
                 cancel=self._scan_cancel,
             )
@@ -2535,21 +2610,53 @@ class SortwiseApp(ctk.CTk):
             self._scan_running = False
             self._set_busy(False, "")
             try:
-                dialog.destroy()
+                self._batch_progress.stop()
+                self._batch_progress.configure(mode="determinate")
             except Exception:
                 pass
+            if hasattr(self, "_bulk_confident"):
+                self._bulk_confident.grid()
+            if hasattr(self, "_batch_button"):
+                self._batch_button.configure(
+                    text="Batch Route", command=self.batch_route_selected,
+                    fg_color=self._theme.ACCENT_DEEP, hover_color=self._theme.ACCENT, text_color="#ffffff"
+                )
             self._apply_scan_results(docs, roots)
 
         def on_error(exc: BaseException) -> None:
             self._scan_running = False
             self._set_busy(False, "")
             try:
-                dialog.destroy()
+                self._batch_progress.stop()
+                self._batch_progress.configure(mode="determinate")
             except Exception:
                 pass
-            self._show_error("Disk scan failed", exc)
+            if hasattr(self, "_bulk_confident"):
+                self._bulk_confident.grid()
+            if hasattr(self, "_batch_button"):
+                self._batch_button.configure(
+                    text="Batch Route", command=self.batch_route_selected,
+                    fg_color=self._theme.ACCENT_DEEP, hover_color=self._theme.ACCENT, text_color="#ffffff"
+                )
+            self._show_error("Scan failed", exc)
 
         self._submit(worker, on_done=on_done, on_error=on_error, manage_busy=False)
+
+    def cancel_disk_scan(self) -> None:
+        if self._scan_running and hasattr(self, "_scan_cancel"):
+            self._scan_cancel.set()
+            self._bulk_summary.configure(text="Cancelling scan…")
+            self._set_status("Scan cancelling…", tone="warn")
+
+    def _update_inline_scan_progress(self, progress: ScanProgress) -> None:
+        if not self._scan_running:
+            return
+        msg = f"Scanning… {progress.directories} folders · {progress.documents} docs found ({progress.elapsed:.1f}s)"
+        try:
+            self._bulk_summary.configure(text=msg)
+            self._set_status(msg, tone="busy")
+        except tk.TclError:
+            pass
 
     def _apply_scan_results(self, documents: list[ScannedDocument], roots: Sequence[str]) -> None:
         scan_items: list[DocItem] = []
@@ -2564,10 +2671,12 @@ class SortwiseApp(ctk.CTk):
                 file_type=doc.file_type,
                 subject=doc.subject,
                 confidence=doc.confidence,
+                entropy=doc.entropy,
                 status=doc.status,
                 modified=doc.modified,
                 pending=True,
                 scan=True,
+                ranking=list(getattr(doc, "ranking", [])),
             )
             if item.status == STATUS_CONFIDENT:
                 confident_count += 1
@@ -2584,7 +2693,7 @@ class SortwiseApp(ctk.CTk):
 
         self._index_all_tree()
         self._refresh_badges()
-        self._set_view(("downloads", None))
+        self._set_view((SCAN_MODE, None))
         self._show_bulk_bar(bool(scan_items))
         self._refresh_bulk_summary()
         self._set_status(
@@ -2723,18 +2832,27 @@ class SortwiseApp(ctk.CTk):
         )
         if file_path:
             p = Path(file_path)
+            rating = rate_document(p.name, get_subject_taxonomy())
             item = DocItem(
                 key=f"file:{p.resolve()}",
                 label=p.name,
+                kind="file",
                 path=str(p.resolve()),
                 size=p.stat().st_size if p.exists() else 0,
                 file_type=p.suffix.lstrip(".").casefold(),
-                is_file=True,
+                subject=rating.subject,
+                confidence=rating.confidence,
+                entropy=rating.entropy,
+                status=rating.status,
+                ranking=list(rating.ranking),
                 pending=True,
             )
-            self._selected = item
-            self._show_file(item)
-            self._render_table()
+            intake_node = next((node for node in self._tree if node.card == "downloads"), None)
+            if intake_node is not None:
+                if not any(c.path == item.path for c in intake_node.children):
+                    intake_node.children.insert(0, item)
+                    intake_node.size += item.size
+            self._select_item(item)
             self._set_status(f"Inspecting file: {p.name}", tone="ok")
 
     def _set_op_mode(self, mode: str) -> None:
@@ -2781,6 +2899,10 @@ class SortwiseApp(ctk.CTk):
         self._render_table()
         self._refresh_shelf_state()
         self._update_nav_arrows()
+        if hasattr(self, "_storage_title_label"):
+            target_name = Path(self._config_store.load().target_root).name or "Library Storage"
+            self._storage_title_label.configure(text=target_name)
+        self._update_crumbs()
         pending = stats.get("pending_count", 0)
         self._set_status(f"Map refreshed · {pending} document(s) waiting", tone="ok")
         self._calibrate_pending_async()
@@ -2812,9 +2934,10 @@ class SortwiseApp(ctk.CTk):
                 label.configure(text=f"{count} · {human_size(size)}")
             else:
                 label.configure(text="empty")
-        self._shelf_hint.configure(
-            text=f"{stats.get('total_count', 0)} documents · {human_size(stats.get('archived_size', 0))}"
-        )
+        if hasattr(self, "_shelf_hint"):
+            self._shelf_hint.configure(
+                text=f"{stats.get('total_count', 0)} documents · {human_size(stats.get('archived_size', 0))}"
+            )
 
     # -- background calibration -------------------------------------------- #
     def _calibrate_pending_async(self) -> None:
@@ -2886,12 +3009,16 @@ class SortwiseApp(ctk.CTk):
         self._badge_dot.configure(text_color=self._theme.TEXT_FAINT)
         self._badge_label.configure(text="awaiting a selection", text_color=self._theme.TEXT_MUTED)
         self._badge_state.configure(text="")
-        self._confidence_bar.configure(progress_color=self._theme.ACCENT)
-        self._confidence_bar.set(0.0)
-        self._confidence_label.configure(text="—")
-        self._entropy_label.configure(text="Shannon entropy  — bits")
+        if hasattr(self, "_prob_container"):
+            for child in self._prob_container.winfo_children():
+                child.destroy()
+        self._entropy_label.configure(text="Shannon entropy: — bits")
         self._gate_label.configure(text="")
-        self._ranking_label.configure(text="")
+        if hasattr(self, "_gate_explanation"):
+            self._gate_explanation.configure(
+                text="Risk-Limiting Gate: Automate if Confidence ≥ 85% & Entropy < 1.0b",
+                text_color=self._theme.TEXT_FAINT,
+            )
         self._rename_entry.delete(0, "end")
         self._rename_dirty = False
         self._subject_menu.set(AUTO_SUBJECT)
@@ -2932,13 +3059,22 @@ class SortwiseApp(ctk.CTk):
             self._badge_label.configure(text=item.label, text_color=self._theme.TEXT_MUTED)
             self._badge_state.configure(text="FOLDER", text_color=self._theme.TEXT_FAINT)
             self._subject_menu.set(AUTO_SUBJECT)
-        self._confidence_bar.set(0.0)
-        self._confidence_bar.configure(progress_color=self._theme.ACCENT)
-        self._confidence_label.configure(text="—")
-        self._entropy_label.configure(text="Shannon entropy  — bits")
+        if hasattr(self, "_prob_container"):
+            for child in self._prob_container.winfo_children():
+                child.destroy()
+            preview = " · ".join(child.label for child in item.children[:4])
+            ctk.CTkLabel(
+                self._prob_container, text=preview or "This folder is empty.",
+                font=self._mono_font(self._theme.FONT_MONO_SMALL), text_color=self._theme.TEXT_FAINT,
+                wraplength=340, justify="left",
+            ).pack(padx=10, pady=8, anchor="w")
+        self._entropy_label.configure(text="Shannon entropy: — bits")
         self._gate_label.configure(text="")
-        preview = " · ".join(child.label for child in item.children[:4])
-        self._ranking_label.configure(text=preview or "This folder is empty.")
+        if hasattr(self, "_gate_explanation"):
+            self._gate_explanation.configure(
+                text="Folder selected · select an individual file to inspect RLCD probabilities.",
+                text_color=self._theme.TEXT_FAINT,
+            )
         self._rename_entry.delete(0, "end")
         self._rename_dirty = False
         self._rename_hint.configure(text="Select a document inside to route and rename it.")
@@ -2968,6 +3104,7 @@ class SortwiseApp(ctk.CTk):
             self._pill_pages.configure(text="pages —")
 
         confidence = item.confidence if item.confidence is not None else 0.0
+        entropy = item.entropy if item.entropy is not None else 0.0
         state = "pending" if item.pending else "archived"
         if item.subject:
             entry = get_subject_taxonomy().get(item.subject, {})
@@ -2987,14 +3124,80 @@ class SortwiseApp(ctk.CTk):
             text_color=self._status_color(item.status),
         )
         self._subject_menu.set(item.subject if item.subject in self._subject_values else AUTO_SUBJECT)
-        self._confidence_bar.configure(progress_color=self._status_color(item.status))
-        self._confidence_bar.set(max(0.0, min(1.0, confidence)))
-        self._confidence_label.configure(text=f"{confidence * 100:5.1f}%")
+
+        # Clear and populate the visual probability distribution
+        if hasattr(self, "_prob_container"):
+            for child in self._prob_container.winfo_children():
+                child.destroy()
+
+        rankings = list(item.ranking)
+        if not rankings and item.label:
+            rating = rate_document(item.label, get_subject_taxonomy())
+            rankings = list(rating.ranking)
+            if item.confidence is None or item.confidence == 0:
+                item.confidence = rating.confidence
+                item.entropy = rating.entropy
+                item.status = rating.status
+                confidence = rating.confidence
+                entropy = rating.entropy
+
+        if not rankings and item.subject:
+            rankings = [(item.subject, confidence or 0.85)]
+
+        if hasattr(self, "_prob_container"):
+            if rankings:
+                for rank_idx, (subj, prob) in enumerate(rankings[:4]):
+                    row_frame = ctk.CTkFrame(self._prob_container, fg_color="transparent")
+                    row_frame.pack(fill="x", padx=10, pady=4)
+                    row_frame.grid_columnconfigure(1, weight=1)
+
+                    entry = get_subject_taxonomy().get(subj, {})
+                    short_name = entry.get("code") or entry.get("name") or subj.split(" - ")[-1]
+                    if len(short_name) > 20:
+                        short_name = short_name[:18] + "…"
+
+                    ctk.CTkLabel(
+                        row_frame, text=short_name, width=105,
+                        font=self._mono_font(self._theme.FONT_MONO_SMALL, "bold" if rank_idx == 0 else "normal"),
+                        text_color=self._theme.TEXT if rank_idx == 0 else self._theme.TEXT_MUTED,
+                        anchor="w",
+                    ).grid(row=0, column=0, sticky="w")
+
+                    pbar = ctk.CTkProgressBar(
+                        row_frame, height=8, corner_radius=4, fg_color=self._theme.BG,
+                        progress_color=self._subject_color(subj) if rank_idx == 0 else self._theme.BORDER_STRONG,
+                    )
+                    pbar.set(max(0.02, min(1.0, float(prob))))
+                    pbar.grid(row=0, column=1, sticky="ew", padx=(6, 8))
+
+                    ctk.CTkLabel(
+                        row_frame, text=f"{prob * 100:4.1f}%", width=48,
+                        font=self._mono_font(self._theme.FONT_MONO_SMALL, "bold" if rank_idx == 0 else "normal"),
+                        text_color=self._theme.SUCCESS if rank_idx == 0 and prob >= 0.85 else self._theme.TEXT_MUTED,
+                        anchor="e",
+                    ).grid(row=0, column=2, sticky="e")
+            else:
+                ctk.CTkLabel(
+                    self._prob_container, text="No probability distribution computed yet.",
+                    font=self._mono_font(self._theme.FONT_MONO_SMALL), text_color=self._theme.TEXT_FAINT,
+                ).pack(padx=10, pady=8)
+
         config = self._config_store.load()
-        self._gate_label.configure(
-            text=f"gate {config.confidence_threshold:.2f} / {config.entropy_threshold:.2f} bits"
-        )
-        self._entropy_label.configure(text="Shannon entropy  — bits")
+        self._entropy_label.configure(text=f"Shannon Entropy: {entropy:.2f} bits")
+        if item.status == STATUS_CONFIDENT:
+            self._gate_label.configure(text="GATE: PASS (CONFIDENT)", text_color=self._theme.SUCCESS)
+            if hasattr(self, "_gate_explanation"):
+                self._gate_explanation.configure(
+                    text=f"Confidence {confidence*100:.1f}% ≥ {config.confidence_threshold*100:.0f}% & Entropy {entropy:.2f}b < {config.entropy_threshold:.2f}b -> Automated route safe",
+                    text_color=self._theme.SUCCESS,
+                )
+        else:
+            self._gate_label.configure(text="GATE: REVIEW REQUIRED", text_color=self._theme.WARN)
+            if hasattr(self, "_gate_explanation"):
+                self._gate_explanation.configure(
+                    text=f"Confidence {confidence*100:.1f}% or Entropy {entropy:.2f}b does not clear risk gate. Routed to human review.",
+                    text_color=self._theme.WARN,
+                )
 
         if not self._rename_dirty:
             suggestion = suggest_filename(title, item.subject or None, item.file_type or "pdf")
