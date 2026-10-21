@@ -1,0 +1,913 @@
+{
+  "total_files": 75,
+  "files": {
+    ".python-version": {
+      "size_bytes": 5,
+      "line_count": 1,
+      "md5": "c0479ff484dacd51dc5ba0461b16b9bf",
+      "classes": [],
+      "functions": []
+    },
+    "LICENSE": {
+      "size_bytes": 35149,
+      "line_count": 674,
+      "md5": "1ebbd3e34237af26da5dc08a4e440464",
+      "classes": [],
+      "functions": []
+    },
+    "README.md": {
+      "size_bytes": 12589,
+      "line_count": 214,
+      "md5": "13074c51bd5daeed630140904f6c662e",
+      "classes": [],
+      "functions": []
+    },
+    "assets/gradient_ascent_loss_surface.png": {
+      "size_bytes": 17939,
+      "line_count": 331,
+      "md5": "5065072bfcd3ee66282596f5c0954cd8",
+      "classes": [],
+      "functions": []
+    },
+    "assets/rvu_logo.png": {
+      "size_bytes": 54239,
+      "line_count": 1630,
+      "md5": "f96bb77dc9215f70d51e9e6d774d2d53",
+      "classes": [],
+      "functions": []
+    },
+    "data/academic_model_profile.json": {
+      "size_bytes": 5964,
+      "line_count": 344,
+      "md5": "2524af96f7429770a17151956642d3c1",
+      "classes": [],
+      "functions": []
+    },
+    "data/repository_metadata.json": {
+      "size_bytes": 54818,
+      "line_count": 2108,
+      "md5": "0f73362f6e9f0100c58eee212dbdefc1",
+      "classes": [],
+      "functions": []
+    },
+    "install_desktop.sh": {
+      "size_bytes": 6588,
+      "line_count": 171,
+      "md5": "4ee266e86a69c463fc95768124fd446a",
+      "classes": [],
+      "functions": []
+    },
+    "opencode-antigravity-integration.md": {
+      "size_bytes": 14364,
+      "line_count": 295,
+      "md5": "9ad09dd607714404659223978d505e65",
+      "classes": [],
+      "functions": []
+    },
+    "pyproject.toml": {
+      "size_bytes": 720,
+      "line_count": 33,
+      "md5": "2d3bc9aa6aaf5fbe80849ecdd6e68031",
+      "classes": [],
+      "functions": []
+    },
+    "reports/academic_corpus_training_report.md": {
+      "size_bytes": 5204,
+      "line_count": 62,
+      "md5": "aa822039ea137a3d108136ff6076bb85",
+      "classes": [],
+      "functions": []
+    },
+    "scripts/generate_10_research_papers.py": {
+      "size_bytes": 6693,
+      "line_count": 175,
+      "md5": "56bbfe65ed8446095fb4f6ff2c023616",
+      "classes": [],
+      "functions": [
+        "analyze_docx_file",
+        "run_batch_generation"
+      ]
+    },
+    "scripts/train_academic_corpus.py": {
+      "size_bytes": 10183,
+      "line_count": 243,
+      "md5": "605b59acfe2ee9386afd639d74091860",
+      "classes": [],
+      "functions": [
+        "fetch_openalex_batch",
+        "reconstruct_abstract",
+        "run_corpus_training"
+      ]
+    },
+    "src/assets/icons/disk.png": {
+      "size_bytes": 8941,
+      "line_count": 254,
+      "md5": "b260ae98fbf53ef1f3a82d6f29c1ed21",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/file-docx.png": {
+      "size_bytes": 2013,
+      "line_count": 64,
+      "md5": "1ea8fcb3ac6a5de3525188227135350b",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/file-pdf.png": {
+      "size_bytes": 1959,
+      "line_count": 58,
+      "md5": "6116d41fc6f29b3b98c586988365cd1f",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/file-pptx.png": {
+      "size_bytes": 2034,
+      "line_count": 66,
+      "md5": "16caea1870559939eab5906bbbd06a30",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/file-text.png": {
+      "size_bytes": 1950,
+      "line_count": 63,
+      "md5": "c48f5f9a2563abb84539e08b46e60eba",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-aiml.png": {
+      "size_bytes": 3764,
+      "line_count": 98,
+      "md5": "f999171bebd0f0f674c4ac8b51ab1791",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-algorithms.png": {
+      "size_bytes": 3752,
+      "line_count": 117,
+      "md5": "4828372ef4b1b6607dfe3fd3206a33ad",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-blue.png": {
+      "size_bytes": 2121,
+      "line_count": 60,
+      "md5": "60bd8c08d514bcc47a9e74d152a09c54",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-calculus.png": {
+      "size_bytes": 3047,
+      "line_count": 78,
+      "md5": "8bcff593eca9d4aa3f5485c2690590df",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-cloud.png": {
+      "size_bytes": 3317,
+      "line_count": 97,
+      "md5": "828d0dec0e5e6905ff18125a4a92bb68",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-cloudcomputing.png": {
+      "size_bytes": 3317,
+      "line_count": 97,
+      "md5": "828d0dec0e5e6905ff18125a4a92bb68",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-cybersecurity.png": {
+      "size_bytes": 4291,
+      "line_count": 120,
+      "md5": "5227b73dce9f9f730bccd425eb72ea7c",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-datascience.png": {
+      "size_bytes": 4016,
+      "line_count": 104,
+      "md5": "a624d55531142ad5ed9efe162e02a58b",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-default.png": {
+      "size_bytes": 2011,
+      "line_count": 47,
+      "md5": "405f0261fe8f221752d3c6039dbb6394",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-documents.png": {
+      "size_bytes": 2778,
+      "line_count": 75,
+      "md5": "9fd8560fa57d4b812900a1d408715cfb",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-downloads.png": {
+      "size_bytes": 2919,
+      "line_count": 81,
+      "md5": "a2521377ee121bf56219e8b60c9e2d96",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-games.png": {
+      "size_bytes": 3742,
+      "line_count": 115,
+      "md5": "90292168dd24a8d9f3ce55793bde0b33",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-music.png": {
+      "size_bytes": 3206,
+      "line_count": 96,
+      "md5": "83861242e74fca6a025865d7abd6673b",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-pictures.png": {
+      "size_bytes": 3597,
+      "line_count": 113,
+      "md5": "9e07805766aee612e8631cee610f83a4",
+      "classes": [],
+      "functions": []
+    },
+    "src/assets/icons/folder-videos.png": {
+      "size_bytes": 3010,
+      "line_count": 89,
+      "md5": "a280b043dfae28215ad094ec9fcac40c",
+      "classes": [],
+      "functions": []
+    },
+    "src/calibrator.py": {
+      "size_bytes": 11905,
+      "line_count": 332,
+      "md5": "5875c6f59f1703aab656fe8bfc098352",
+      "classes": [
+        "CalibratedDecision",
+        "CalibratedClassifier"
+      ],
+      "functions": [
+        "tempered_softmax",
+        "shannon_entropy",
+        "compute_normalized_entropy",
+        "cosine_similarity",
+        "brier_score",
+        "compute_ece",
+        "_ensure_ca_bundle",
+        "_subject_facets",
+        "_get_default_classifier",
+        "classify_document",
+        "classify_extracted"
+      ]
+    },
+    "src/capabilities.py": {
+      "size_bytes": 8462,
+      "line_count": 184,
+      "md5": "ac3dc5829371bb1ec82f175cb8890678",
+      "classes": [
+        "TaskSpecification",
+        "ToolCapability",
+        "CapabilityRegistry"
+      ],
+      "functions": [
+        "get_capability_registry"
+      ]
+    },
+    "src/cie/__init__.py": {
+      "size_bytes": 49,
+      "line_count": 2,
+      "md5": "0f8936db5eb37b278ff81580a5515b6e",
+      "classes": [],
+      "functions": [
+        "main"
+      ]
+    },
+    "src/document_ir.py": {
+      "size_bytes": 7371,
+      "line_count": 216,
+      "md5": "49d9c0c28d987198e1d940d8cc2a41df",
+      "classes": [
+        "CitationIR",
+        "ClaimIR",
+        "FigureIR",
+        "TableIR",
+        "EquationIR",
+        "SectionIR",
+        "DocumentIR"
+      ],
+      "functions": []
+    },
+    "src/docx_creator.py": {
+      "size_bytes": 123060,
+      "line_count": 2736,
+      "md5": "48d198347ee27c5b9db62d8cc774587d",
+      "classes": [
+        "PythonCodeToMathTranspiler"
+      ],
+      "functions": [
+        "find_soffice_binary",
+        "open_in_office",
+        "set_cell_background",
+        "set_cell_margins",
+        "_clean_xml_text",
+        "add_styled_table",
+        "add_styled_figure",
+        "add_code_block",
+        "add_guarded_page_break",
+        "add_clean_math_runs",
+        "add_math_equation_block",
+        "transpile_code_to_math_formulas",
+        "generate_gradient_ascent_chart",
+        "build_academic_cover_page",
+        "build_declaration_page"
+      ]
+    },
+    "src/domain_monographs.py": {
+      "size_bytes": 82360,
+      "line_count": 989,
+      "md5": "7d3e653022001dcc91003e9570f4a8b3",
+      "classes": [],
+      "functions": [
+        "build_zksnarks_paper",
+        "build_neuromorphic_paper",
+        "build_quantum_surface_codes_paper",
+        "build_distributed_consensus_paper",
+        "get_specialized_domain_paper"
+      ]
+    },
+    "src/extractors.py": {
+      "size_bytes": 10943,
+      "line_count": 329,
+      "md5": "b379c3202d5f560027cd7610ed66326a",
+      "classes": [
+        "DocumentExtractionError",
+        "ExtractedDoc"
+      ],
+      "functions": [
+        "_clean_text",
+        "_count_words",
+        "_fallback_title",
+        "_dedupe_preserving_order",
+        "_pdf_layout_headings",
+        "_extract_pdf",
+        "_docx_heading_style",
+        "_extract_docx",
+        "_extract_pptx",
+        "_extract_plain_text",
+        "extract_document"
+      ]
+    },
+    "src/generate_icons.py": {
+      "size_bytes": 10981,
+      "line_count": 306,
+      "md5": "c7c28cfc8196c559476d1edb9f0256a2",
+      "classes": [],
+      "functions": [
+        "new_canvas",
+        "save_icon",
+        "draw_folder_base",
+        "make_folder_default",
+        "make_folder_blue",
+        "make_folder_documents",
+        "make_folder_downloads",
+        "make_folder_aiml",
+        "make_folder_algorithms",
+        "make_folder_calculus",
+        "make_folder_datascience",
+        "make_folder_cybersecurity",
+        "make_folder_cloud",
+        "make_folder_games",
+        "make_folder_music"
+      ]
+    },
+    "src/gui.py": {
+      "size_bytes": 10459,
+      "line_count": 302,
+      "md5": "d6d3f257c5b79d5ff524979a9ddc934b",
+      "classes": [
+        "LocalServer"
+      ],
+      "functions": [
+        "port_is_free",
+        "pick_port",
+        "has_display",
+        "wait_for_server",
+        "open_native_window",
+        "open_browser_window",
+        "parse_args",
+        "main"
+      ]
+    },
+    "src/ieee_latex_creator.py": {
+      "size_bytes": 10564,
+      "line_count": 282,
+      "md5": "9e95cc0e0ed5418c275bb76cb4674eb0",
+      "classes": [],
+      "functions": [
+        "sanitize_latex",
+        "export_to_ieee_latex"
+      ]
+    },
+    "src/interpreter.py": {
+      "size_bytes": 10894,
+      "line_count": 272,
+      "md5": "9b154430c51489b11964fed2a6928f31",
+      "classes": [
+        "RequestInterpreter"
+      ],
+      "functions": [
+        "get_request_interpreter"
+      ]
+    },
+    "src/lain_monograph.py": {
+      "size_bytes": 57471,
+      "line_count": 303,
+      "md5": "cb4b21432a09b9ec40d96e7e05aa183a",
+      "classes": [],
+      "functions": [
+        "build_serial_experiments_lain_monograph"
+      ]
+    },
+    "src/markdown_parser.py": {
+      "size_bytes": 28925,
+      "line_count": 770,
+      "md5": "46897a8fb3d79b0a321855c737f68614",
+      "classes": [],
+      "functions": [
+        "_set_cell_bg",
+        "_set_cell_borders",
+        "_set_cell_padding",
+        "add_inline_markdown",
+        "render_alert_box",
+        "render_markdown_table",
+        "parse_markdown_into_doc",
+        "markdown_to_docx",
+        "parse_markdown_into_sections"
+      ]
+    },
+    "src/native_app.py": {
+      "size_bytes": 201648,
+      "line_count": 4660,
+      "md5": "be74b680226d95d3e180b451791c7082",
+      "classes": [
+        "SingleInstanceLock",
+        "Theme",
+        "Icons",
+        "DocItem",
+        "PillBar",
+        "SettingsDialog",
+        "TrainingDialog",
+        "ScanSetupDialog",
+        "ScanProgressDialog",
+        "SortwiseApp"
+      ],
+      "functions": [
+        "open_in_dolphin",
+        "_find_zenity_binary",
+        "_find_kdialog_binary",
+        "native_choose_folder",
+        "native_choose_file",
+        "_rgb",
+        "_hex",
+        "mix",
+        "lighten",
+        "darken",
+        "readable_on",
+        "pick_font_family",
+        "file_icon_name",
+        "_score_subject",
+        "heuristic_confidence"
+      ]
+    },
+    "src/research_engine.py": {
+      "size_bytes": 48533,
+      "line_count": 677,
+      "md5": "385cc7d81449b297bd7f70750a1d3f56",
+      "classes": [],
+      "functions": [
+        "is_research_paper_request",
+        "extract_topic_from_prompt",
+        "build_serial_experiments_lain_paper",
+        "build_rlcd_research_paper",
+        "build_universal_research_paper",
+        "_legacy_build_universal_research_paper",
+        "synthesize_research_document"
+      ]
+    },
+    "src/research_pipeline.py": {
+      "size_bytes": 16585,
+      "line_count": 351,
+      "md5": "dac7e84a3ce00ac4d501cf76a10c555a",
+      "classes": [],
+      "functions": [
+        "fetch_arxiv_papers",
+        "fetch_wikipedia_grounding",
+        "synthesize_evidence_document"
+      ]
+    },
+    "src/rlcd.py": {
+      "size_bytes": 41026,
+      "line_count": 1040,
+      "md5": "3c93dd85748661615a4bacd74561dd6f",
+      "classes": [
+        "RLCDDecision",
+        "RLCDPolicyStore",
+        "RLCDRouter"
+      ],
+      "functions": [
+        "normalise_text",
+        "tempered_softmax",
+        "compute_shannon_entropy",
+        "compute_normalized_shannon_entropy",
+        "compute_kl_divergence",
+        "compute_jensen_shannon_divergence",
+        "compute_brier_score",
+        "compute_ece",
+        "discover_target_categories",
+        "build_dynamic_taxonomy",
+        "get_default_policy_store",
+        "get_default_router",
+        "quick_extract_sample",
+        "train_prototypes_from_library",
+        "query_chat_explanation"
+      ]
+    },
+    "src/scanner.py": {
+      "size_bytes": 25076,
+      "line_count": 702,
+      "md5": "2e0f24447fc5375583afcdef7158ed11",
+      "classes": [
+        "ConfidenceRating",
+        "ScanProgress",
+        "ScannedDocument",
+        "DiskScanner"
+      ],
+      "functions": [
+        "normalise_token",
+        "human_size",
+        "default_workers",
+        "is_excluded_name",
+        "is_excluded_path",
+        "preset_targets",
+        "_get_compiled_taxonomy",
+        "keyword_scores",
+        "rate_scores",
+        "rate_document",
+        "_extension_of"
+      ]
+    },
+    "src/server.py": {
+      "size_bytes": 45797,
+      "line_count": 1220,
+      "md5": "6fbee404b7c98bfb699c883901655eb6",
+      "classes": [
+        "SortwiseError",
+        "SortwiseConfig",
+        "ConfigStore",
+        "Ledger",
+        "SortwiseService",
+        "ConfigUpdate",
+        "ScanRequest",
+        "RouteRequest",
+        "BatchRouteRequest",
+        "RenameSuggestRequest"
+      ],
+      "functions": [
+        "expand_path",
+        "sanitize_filename",
+        "unique_path",
+        "_now_iso",
+        "_xdg_config_home",
+        "_xdg_data_home",
+        "default_config_path",
+        "default_ledger_path",
+        "_clamp_float",
+        "_entry_defaults",
+        "human_size",
+        "create_app",
+        "main"
+      ]
+    },
+    "src/static/app.js": {
+      "size_bytes": 49872,
+      "line_count": 1419,
+      "md5": "c3c66997a288a0f68a348519f0d8ebb1",
+      "classes": [],
+      "functions": []
+    },
+    "src/static/index.html": {
+      "size_bytes": 22549,
+      "line_count": 441,
+      "md5": "4a54c3e55fff386ec8457952f5012483",
+      "classes": [],
+      "functions": []
+    },
+    "src/static/sortwise.svg": {
+      "size_bytes": 981,
+      "line_count": 21,
+      "md5": "dd152b67a2aa8c178f305bcbb7da3b64",
+      "classes": [],
+      "functions": []
+    },
+    "src/static/styles.css": {
+      "size_bytes": 29113,
+      "line_count": 971,
+      "md5": "370fc9da5269884ea5cd1b40aeda8786",
+      "classes": [],
+      "functions": []
+    },
+    "src/taxonomy.py": {
+      "size_bytes": 21339,
+      "line_count": 353,
+      "md5": "c6cf9b5692fc771e144542123672bb6b",
+      "classes": [],
+      "functions": [
+        "get_subject_taxonomy",
+        "subject_labels",
+        "discover_target_taxonomy"
+      ]
+    },
+    "src/universal_synthesizer.py": {
+      "size_bytes": 71517,
+      "line_count": 942,
+      "md5": "cd03eb8fbf3340a39bef39b9de1c6214",
+      "classes": [],
+      "functions": [
+        "detect_domain",
+        "synthesize_universal_paper",
+        "_build_zoology_biology_paper",
+        "_build_physics_astronomy_paper",
+        "_build_media_philosophy_paper",
+        "_build_economics_finance_paper",
+        "_build_cs_engineering_paper"
+      ]
+    },
+    "src/views.py": {
+      "size_bytes": 75066,
+      "line_count": 1788,
+      "md5": "af4dae2ca7f3a06a0bc662049dcb3db8",
+      "classes": [
+        "SettingsView",
+        "ModelChatView",
+        "WordCreatorView",
+        "TrainingView"
+      ],
+      "functions": [
+        "attach_text_context_menu"
+      ]
+    },
+    "src/web_automator.py": {
+      "size_bytes": 28642,
+      "line_count": 749,
+      "md5": "849476f881c1097eecb85313fc5cba3f",
+      "classes": [
+        "MarionetteClient"
+      ],
+      "functions": [
+        "scan_installed_browsers",
+        "detect_default_browser",
+        "resolve_target_browser",
+        "resolve_site_url",
+        "resolve_subtask_url",
+        "parse_automation_intent",
+        "prepare_gecko_profile",
+        "automate_browser_task"
+      ]
+    },
+    "src/web_fetcher.py": {
+      "size_bytes": 19872,
+      "line_count": 444,
+      "md5": "0ef367abe7d900afa0d1c4c075bc0feb",
+      "classes": [],
+      "functions": [
+        "fetch_wikipedia_summary",
+        "fetch_duckduckgo_snippets",
+        "clean_search_topic",
+        "fetch_and_cache_topic_images",
+        "fetch_wikipedia_sections_content",
+        "fetch_web_context",
+        "enrich_sections_with_web_context",
+        "format_web_chat_response"
+      ]
+    },
+    "tests/test_architectural_audit.py": {
+      "size_bytes": 2380,
+      "line_count": 54,
+      "md5": "271eafddc484f8f183c539d5026b9466",
+      "classes": [
+        "TestIntentAndTopicExtractionAudit",
+        "TestDomainHardcodingAudit"
+      ],
+      "functions": []
+    },
+    "tests/test_calibration_metrics.py": {
+      "size_bytes": 1838,
+      "line_count": 63,
+      "md5": "74b7b84367954d3c8c8dad55cf9ff9c3",
+      "classes": [],
+      "functions": [
+        "test_ece_edge_cases",
+        "test_normalized_entropy_properties",
+        "test_calibrated_decision_dataclass_fields"
+      ]
+    },
+    "tests/test_docx_creator.py": {
+      "size_bytes": 13041,
+      "line_count": 343,
+      "md5": "82d31e16f23ff640c180fbf96559c62b",
+      "classes": [],
+      "functions": [
+        "test_create_word_document_structure",
+        "test_export_chat_to_docx",
+        "test_find_soffice_binary_and_open",
+        "test_academic_cie_document_generation",
+        "test_finance_domain_document_generation",
+        "test_event_club_document_generation",
+        "test_chart_generation_and_figure_embedding",
+        "test_attachment_handling",
+        "test_a4_dimensions_and_academic_typography",
+        "test_code_to_math_transpilation_and_equations",
+        "test_toc_generation_and_guarded_page_breaks",
+        "test_create_docx_of_topic_natural_language"
+      ]
+    },
+    "tests/test_generalized_engine.py": {
+      "size_bytes": 8350,
+      "line_count": 171,
+      "md5": "d7d578db0b8d2a5fd7a957ca1748425d",
+      "classes": [
+        "TestUniversalRequestInterpreter",
+        "TestGeneralEvidenceGroundedSynthesis"
+      ],
+      "functions": []
+    },
+    "tests/test_held_out_evaluation.py": {
+      "size_bytes": 7914,
+      "line_count": 158,
+      "md5": "dfb7796ba31744b76ddf9f9030c8f806",
+      "classes": [
+        "TestHeldOutInterpretationSuite",
+        "TestDomainSeparationAndSynthesisIntegrity"
+      ],
+      "functions": []
+    },
+    "tests/test_markdown_parser.py": {
+      "size_bytes": 8013,
+      "line_count": 227,
+      "md5": "549e2d233aea19642aea0a2fe1d72529",
+      "classes": [],
+      "functions": [
+        "test_inline_markdown_formatting",
+        "test_alert_callouts_rendering",
+        "test_gfm_table_rendering_and_alignments",
+        "test_math_equation_block_has_no_interior_vertical_borders",
+        "test_parse_markdown_into_sections",
+        "update_step",
+        "test_markdown_to_docx_file_export",
+        "test_parse_document_request_with_attached_markdown_file"
+      ]
+    },
+    "tests/test_native_dialogs.py": {
+      "size_bytes": 2971,
+      "line_count": 82,
+      "md5": "46cc46fa67dc3a3fd12b26d1302c12ea",
+      "classes": [],
+      "functions": [
+        "test_zenity_binary_finder",
+        "test_native_choose_folder_cancel",
+        "test_native_choose_folder_success",
+        "test_native_choose_file_cancel",
+        "test_native_choose_file_success"
+      ]
+    },
+    "tests/test_rlcd.py": {
+      "size_bytes": 10609,
+      "line_count": 301,
+      "md5": "4a7aa341f6808d6b6dec81f77900ee75",
+      "classes": [],
+      "functions": [
+        "test_tempered_softmax",
+        "test_shannon_entropy",
+        "test_normalized_shannon_entropy",
+        "test_compute_ece_and_brier_score",
+        "test_jensen_shannon_divergence",
+        "test_dynamic_category_discovery",
+        "test_build_dynamic_taxonomy",
+        "test_rlcd_policy_store_and_running_mean",
+        "test_rlcd_routing_and_disagreement",
+        "test_quick_extract_sample_and_library_training",
+        "test_query_chat_explanation"
+      ]
+    },
+    "tests/test_scanner.py": {
+      "size_bytes": 9384,
+      "line_count": 264,
+      "md5": "e2b9c564754180ebaed9f5730cb6e4c4",
+      "classes": [],
+      "functions": [
+        "tree",
+        "test_excluded_names",
+        "test_excluded_paths",
+        "test_scanner_skips_system_and_vcs_directories",
+        "test_scan_is_non_recursive_when_asked",
+        "test_max_depth_limits_the_walk",
+        "test_rate_document_confident_on_explicit_code",
+        "test_rate_document_ambiguous_on_junk_name",
+        "test_keyword_scores_are_whole_word",
+        "test_rate_scores_empty_taxonomy_is_ambiguous",
+        "test_rate_scores_respects_thresholds",
+        "test_normalise_token_collapses_separators",
+        "test_scan_reports_progress_and_completion",
+        "test_scan_can_be_cancelled",
+        "test_scan_missing_root_returns_empty"
+      ]
+    },
+    "tests/test_server.py": {
+      "size_bytes": 21376,
+      "line_count": 558,
+      "md5": "813c108c8a2f6b89da337b9909f11e0e",
+      "classes": [
+        "FakeClassifier"
+      ],
+      "functions": [
+        "write_docx",
+        "write_pdf",
+        "write_pptx",
+        "sandbox",
+        "docs",
+        "build_client",
+        "client",
+        "test_config_defaults_are_well_formed",
+        "test_config_update_persists_to_disk",
+        "test_config_rejects_out_of_range_threshold",
+        "test_config_empty_body_is_a_no_op",
+        "test_subjects_exposes_the_full_taxonomy",
+        "test_subject_folder_template_is_applied",
+        "test_scan_finds_only_supported_documents",
+        "test_scan_is_also_available_via_get"
+      ]
+    },
+    "tests/test_single_instance_and_empty.py": {
+      "size_bytes": 2196,
+      "line_count": 78,
+      "md5": "08e8e308d7ed041b98dc3115e1dc9ade",
+      "classes": [],
+      "functions": [
+        "test_single_instance_lock_lifecycle",
+        "test_disk_scanner_empty_folder",
+        "test_disk_scanner_cancellation"
+      ]
+    },
+    "tests/test_step1.py": {
+      "size_bytes": 13676,
+      "line_count": 353,
+      "md5": "91f0680e68608d28684bd29810373d00",
+      "classes": [],
+      "functions": [
+        "_write_pdf",
+        "_write_docx",
+        "_write_pptx",
+        "sample_docs",
+        "test_extract_pdf",
+        "test_extract_docx",
+        "test_extract_pptx",
+        "test_extract_missing_file_raises",
+        "test_extract_unsupported_type_raises",
+        "test_taxonomy_contains_all_eight_subjects",
+        "test_taxonomy_is_a_copy",
+        "classifier",
+        "test_calibrator_routes_documents",
+        "test_decision_is_well_formed",
+        "test_status_matches_triage_rule"
+      ]
+    },
+    "tests/test_web_features.py": {
+      "size_bytes": 7608,
+      "line_count": 201,
+      "md5": "6e7af8862a2f49400aee7b97a2e91391",
+      "classes": [],
+      "functions": [
+        "test_detect_default_browser",
+        "test_dynamic_site_and_game_resolution",
+        "test_enrich_sections_with_web_context",
+        "test_enrich_sections_when_offline",
+        "test_format_web_chat_response",
+        "test_web_fetch_live_or_fallback",
+        "test_parse_automation_intent_google_docs_writing",
+        "test_parse_automation_intent_gameplay",
+        "test_parse_automation_intent_google_slides_writing",
+        "test_scan_installed_browsers",
+        "test_missing_browser_detection",
+        "test_parse_automation_intent_arbitrary_topics_and_browser"
+      ]
+    },
+    "uv.lock": {
+      "size_bytes": 479958,
+      "line_count": 2509,
+      "md5": "2fa89479772b683a1fa7083da86aa1ae",
+      "classes": [],
+      "functions": []
+    }
+  }
+}

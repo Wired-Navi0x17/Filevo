@@ -3,7 +3,7 @@
 > **Calibrated Academic Document Router & Visual Storage Manager**  
 > Physical Native Desktop Application (Linux X11/Wayland) · RLCD Calibrated Classification · Filelight Proportion Map · BCUninstaller Multi-Threaded Disk Scanner
 
-[![Tests](https://img.shields.io/badge/tests-88%20passed-10b981.svg)](#test-suite)
+[![Tests](https://img.shields.io/badge/tests-109%20passed-10b981.svg)](#test-suite)
 [![Python](https://img.shields.io/badge/python-3.11+-3b82f6.svg)](pyproject.toml)
 [![UI](https://img.shields.io/badge/ui-native%20desktop%20(customtkinter)-20242f.svg)](src/native_app.py)
 
@@ -22,7 +22,7 @@ Unlike web or browser-based tools, Sortwise runs as a **100% physical native des
   * **Mode A (Folder Scan)**: Target an intake directory (e.g. `~/Downloads` or course directory).
   * **Mode B (Deep System Scan)**: Traverses your User Home (`~/`) or Entire OS filesystem (`/`) for orphaned lecture slides, notes, and syllabus documents.
 * **Live Streaming Progress & Cooperative Cancellation**: Real-time progress dialog displaying visited folders, inspected files, discovered documents, elapsed time, and a responsive cancel button.
-* **RLCD Calibrated Decisions**: SentenceTransformer (`all-MiniLM-L6-v2`) neural embeddings, subject centroid cosine similarities, temperature-scaled softmax ($T=0.15$), and Shannon entropy bounds ($H < 1.5$ bits) ensuring documents are routed with mathematical confidence.
+* **RLCD Calibrated Decisions**: Dual-perspective classification (lexical tokens + dense SentenceTransformer `all-MiniLM-L6-v2` embeddings), Jensen-Shannon Divergence ($D_{\text{JS}} \le 0.25$), normalized Shannon entropy ($H_{\text{norm}} \le 0.55$), Expected Calibration Error (ECE) telemetry, and human-in-the-loop contextual bandit policy gradient optimization.
 * **Curriculum Taxonomy (Semester 3)**: Tailored keyword profiles and embeddings for core computer science & mathematics subjects, explicitly including **CS2806 - Calculus**.
 * **Filelight-Style Proportion Map**: Pastel-tinted proportion pill bars and folder shelf visualizing disk footprint and distribution.
 * **In-Flight Document Inspector & Renaming**: Inspect recovered metadata, slide/page counts, and generated titles with 1-click routing.
@@ -47,31 +47,44 @@ Sortwise includes rich subject profiles and syllabus keywords for Semester 3 uni
 
 ---
 
-## AI/ML Calibration Architecture
+## RLCD Calibration & Reinforcement Architecture
 
 ```
                        ┌───────────────────────────────┐
                        │   Extracted Document (.pdf,   │
-                       │         .docx, .pptx)         │
+                       │     .docx, .pptx, .txt, .md)  │
+                       └──────────────┬────────────────┘
+                                      │
+                 ┌────────────────────┴────────────────────┐
+                 │                                         │
+                 ▼                                         ▼
+  ┌──────────────────────────────┐          ┌──────────────────────────────┐
+  │      Lexical Classifier      │          │     Semantic Bi-Encoder      │
+  │ Sublinear Length-Normalized  │          │   SentenceTransformer MiniLM │
+  │ Keyword & N-Gram Frequencies │          │    Dense Cosine Similarity   │
+  └──────────────┬───────────────┘          └──────────────┬───────────────┘
+                 │                                         │
+                 ▼                                         ▼
+  ┌──────────────────────────────┐          ┌──────────────────────────────┐
+  │  Tempered Softmax (P_lex)    │          │  Tempered Softmax (P_sem)    │
+  │     Scale-Balanced Logits    │          │       Centered Logits        │
+  └──────────────┬───────────────┘          └──────────────┬───────────────┘
+                 │                                         │
+                 └────────────────────┬────────────────────┘
+                                      │
+                                      ▼
+                       ┌───────────────────────────────┐
+                       │  Classifier Disagreement      │
+                       │  Jensen-Shannon Divergence    │
+                       │  D_JS(P_lex || P_sem)         │
+                       │  Agreement = 1.0 - D_JS       │
                        └──────────────┬────────────────┘
                                       │
                                       ▼
                        ┌───────────────────────────────┐
-                       │    SentenceTransformer        │
-                       │    (all-MiniLM-L6-v2)         │
-                       │      Dense Embeddings         │
-                       └──────────────┬────────────────┘
-                                      │
-                                      ▼
-                       ┌───────────────────────────────┐
-                       │  Cosine Similarity to Subject │
-                       │           Centroids           │
-                       └──────────────┬────────────────┘
-                                      │
-                                      ▼
-                       ┌───────────────────────────────┐
-                       │    Tempered Softmax (T=0.15)  │
-                       │      Calibrated Probabilities │
+                       │   Ensemble Posterior & Gates  │
+                       │   P_ens = 0.5*(P_lex + P_sem) │
+                       │   H_norm = H(P_ens)/log2(K)   │
                        └──────────────┬────────────────┘
                                       │
                      ┌────────────────┴────────────────┐
@@ -79,13 +92,25 @@ Sortwise includes rich subject profiles and syllabus keywords for Semester 3 uni
                      ▼                                 ▼
          ┌────────────────────────┐        ┌────────────────────────┐
          │ Confidence >= 0.70 AND │        │  Confidence < 0.70 OR  │
-         │   Entropy < 1.5 bits   │        │   Entropy >= 1.5 bits  │
+         │   Agreement >= 0.75    │        │    Agreement < 0.75    │
+         │   H_norm <= 0.55       │        │     H_norm > 0.55      │
          └───────────┬────────────┘        └───────────┬────────────┘
                      │                                 │
                      ▼                                 ▼
              [CONFIDENT TIER]                   [REVIEW QUEUE]
            Auto-route to Subject             Held for User Inspection
             Archive Directory                       & Override
+                     │                                 │
+                     └────────────────┬────────────────┘
+                                      │
+                                      ▼
+                       ┌───────────────────────────────┐
+                       │ Human-in-the-Loop Feedback:   │
+                       │ Contextual Policy Gradient    │
+                       │   theta <- theta + a*grad*R   │
+                       │ Non-Catastrophic Centroids    │
+                       │ ECE & Brier Score Telemetry   │
+                       └───────────────────────────────┘
 ```
 
 ---
@@ -180,10 +205,10 @@ Sortwise maintains an extensive test suite covering document extraction, taxonom
 Run all tests:
 
 ```bash
-uv run pytest tests/
+PYTHONPATH=. LD_LIBRARY_PATH="/run/current-system/sw/share/nix-ld/lib:$LD_LIBRARY_PATH" uv run pytest tests/
 ```
 
 Results:
 ```
-======================== 88 passed in ~15s ========================
+======================== 109 passed in ~36s ========================
 ```

@@ -2,7 +2,7 @@
 
 The classifier embeds a document with a Sentence-Transformer
 (``all-MiniLM-L6-v2``), compares it by cosine similarity against a semantic
-*centroid* per subject from :mod:`src.taxonomy`, turns those similarities into
+centroid per subject from :mod:`src.taxonomy`, turns those similarities into
 a probability distribution with a low-temperature softmax, and reports both the
 winning subject and two uncertainty signals:
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 
@@ -31,6 +32,8 @@ __all__ = [
     "brier_score",
     "classify_document",
     "classify_extracted",
+    "compute_ece",
+    "compute_normalized_entropy",
     "cosine_similarity",
     "shannon_entropy",
     "tempered_softmax",
@@ -62,7 +65,7 @@ def tempered_softmax(similarities: list[float] | np.ndarray, temperature: float)
     z = z - np.max(z)
     exp = np.exp(z)
     total = exp.sum()
-    if total == 0:  # pragma: no cover - cannot happen with exp of finite values
+    if total == 0:  # pragma: no cover
         return np.full_like(exp, 1.0 / exp.size)
     return exp / total
 
@@ -74,6 +77,12 @@ def shannon_entropy(probabilities: list[float] | np.ndarray) -> float:
     if p.size == 0:
         return 0.0
     return float(-np.sum(p * np.log2(p)))
+
+
+def compute_normalized_entropy(probabilities: list[float] | np.ndarray) -> float:
+    """Normalized Shannon entropy in [0, 1]: ``H_norm(P) = H(P) / log2(K)``."""
+    from .rlcd import compute_normalized_shannon_entropy
+    return compute_normalized_shannon_entropy(probabilities)
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -90,7 +99,7 @@ def brier_score(probabilities: list[float], ground_truth_idx: int) -> float:
     """Multiclass Brier score: ``sum_k (p_k - y_k)^2`` with one-hot ``y``.
 
     Lower is better. ``0.0`` is a perfect, fully confident correct prediction;
-    ``1.0`` is a fully confident *wrong* prediction. This measures the quality
+    ``2.0`` is a fully confident wrong prediction. This measures the quality
     of the calibration, not just the argmax correctness.
     """
     p = np.asarray(probabilities, dtype=np.float64).ravel()
@@ -104,6 +113,16 @@ def brier_score(probabilities: list[float], ground_truth_idx: int) -> float:
     target = np.zeros_like(p)
     target[ground_truth_idx] = 1.0
     return float(np.sum((p - target) ** 2))
+
+
+def compute_ece(
+    confidences: Sequence[float],
+    accuracies: Sequence[bool | int],
+    num_bins: int = 10,
+) -> float:
+    """Compute Expected Calibration Error (ECE)."""
+    from .rlcd import compute_ece as rlcd_ece
+    return rlcd_ece(confidences, accuracies, num_bins=num_bins)
 
 
 # --------------------------------------------------------------------------- #
@@ -120,26 +139,26 @@ class CalibratedDecision:
     ranking: list[tuple[str, float]]
     agreement: float = 1.0
     disagreement: float = 0.0
+    normalized_entropy: float = 0.0
+    doc_embedding: np.ndarray | None = None
+
+    @property
+    def confident(self) -> bool:
+        return self.status == STATUS_CONFIDENT
 
 
 # --------------------------------------------------------------------------- #
 # Classifier
 # --------------------------------------------------------------------------- #
 def _ensure_ca_bundle() -> None:
-    """Point Python/requests at a CA bundle when the environment lacks one.
-
-    NixOS installations frequently ship an OpenSSL that cannot locate the
-    system trust store from inside a virtualenv, which makes the model
-    download fail with ``CERTIFICATE_VERIFY_FAILED``. Setting ``SSL_CERT_FILE``
-    from certifi is a no-op on healthy systems.
-    """
+    """Point Python/requests at a CA bundle when the environment lacks one."""
     if os.environ.get("SSL_CERT_FILE"):
         return
     try:
         import certifi
 
         bundle = certifi.where()
-    except Exception:  # pragma: no cover - certifi is a std dependency here
+    except Exception:  # pragma: no cover
         return
     os.environ.setdefault("SSL_CERT_FILE", bundle)
     os.environ.setdefault("REQUESTS_CA_BUNDLE", bundle)
@@ -157,14 +176,13 @@ def _subject_facets(subject: dict) -> list[str]:
         f"{name}. Core topics: " + ", ".join(keywords),
         syllabus,
     ]
-    # Additional chunks keep long keyword lists from being diluted in one facet.
     for start in range(0, len(keywords), 12):
         facets.append(f"{name}: " + ", ".join(keywords[start : start + 12]))
     return [f for f in facets if f.strip()]
 
 
 class CalibratedClassifier:
-    """Embedding-based, entropy-calibrated subject classifier."""
+    """Dual-perspective, entropy-calibrated subject classifier."""
 
     def __init__(
         self,
@@ -241,6 +259,7 @@ class CalibratedClassifier:
         )
         subject, confidence = ranking[0]
         entropy = shannon_entropy(probs)
+        norm_entropy = compute_normalized_entropy(probs)
         status = (
             STATUS_CONFIDENT
             if confidence >= CONFIDENCE_THRESHOLD and entropy < ENTROPY_THRESHOLD
@@ -252,11 +271,36 @@ class CalibratedClassifier:
             entropy=entropy,
             status=status,
             ranking=ranking,
+            agreement=1.0,
+            disagreement=0.0,
+            normalized_entropy=norm_entropy,
         )
 
     def classify(self, text: str) -> CalibratedDecision:
-        """Classify raw document text."""
-        return self.decide(self.probabilities(text))
+        """Classify raw document text using dual-perspective RLCD router."""
+        try:
+            from .rlcd import get_default_router
+            router = get_default_router()
+            dec, doc_vec = router.classify(
+                text,
+                self._taxonomy,
+                threshold=CONFIDENCE_THRESHOLD,
+                entropy_threshold=ENTROPY_THRESHOLD,
+                temperature=self.temperature,
+            )
+            return CalibratedDecision(
+                subject=dec.subject,
+                confidence=dec.confidence,
+                entropy=dec.entropy,
+                status=dec.status,
+                ranking=dec.ranking,
+                agreement=dec.agreement,
+                disagreement=dec.disagreement,
+                normalized_entropy=dec.normalized_entropy,
+                doc_embedding=doc_vec,
+            )
+        except Exception:
+            return self.decide(self.probabilities(text))
 
     def classify_document(self, doc: ExtractedDoc) -> CalibratedDecision:
         """Classify an :class:`~src.extractors.ExtractedDoc`."""

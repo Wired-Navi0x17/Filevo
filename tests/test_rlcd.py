@@ -1,4 +1,4 @@
-"""Unit tests for the RLCD (Reinforcement Learning from Classifier Disagreement) engine."""
+"""Unit tests for the RLCD (Reinforcement Learning Calibrated Decision) engine."""
 
 import tempfile
 import json
@@ -11,7 +11,10 @@ from src.rlcd import (
     RLCDPolicyStore,
     RLCDRouter,
     build_dynamic_taxonomy,
+    compute_brier_score,
+    compute_ece,
     compute_jensen_shannon_divergence,
+    compute_normalized_shannon_entropy,
     compute_shannon_entropy,
     discover_target_categories,
     tempered_softmax,
@@ -48,6 +51,41 @@ def test_shannon_entropy():
     # Uniform distribution over 4 classes has 2 bits of entropy
     p_uni4 = [0.25, 0.25, 0.25, 0.25]
     assert np.isclose(compute_shannon_entropy(p_uni4), 2.0)
+
+
+def test_normalized_shannon_entropy():
+    # Deterministic distribution has 0 normalized entropy
+    p_det = [1.0, 0.0, 0.0, 0.0]
+    assert np.isclose(compute_normalized_shannon_entropy(p_det), 0.0)
+
+    # Uniform distribution over 2 classes has normalized entropy 1.0
+    p_uni2 = [0.5, 0.5]
+    assert np.isclose(compute_normalized_shannon_entropy(p_uni2), 1.0)
+
+    # Uniform distribution over 8 classes has normalized entropy 1.0
+    p_uni8 = [1.0 / 8.0] * 8
+    assert np.isclose(compute_normalized_shannon_entropy(p_uni8), 1.0)
+
+    # Single class has 0 normalized entropy
+    assert np.isclose(compute_normalized_shannon_entropy([1.0]), 0.0)
+
+
+def test_compute_ece_and_brier_score():
+    # Expected Calibration Error test
+    confidences = [0.9, 0.9, 0.8, 0.2]
+    accuracies = [1, 1, 1, 0]
+    ece = compute_ece(confidences, accuracies, num_bins=5)
+    assert 0.0 <= ece <= 1.0
+
+    # Completely wrong predictions with high confidence should have high ECE
+    bad_conf = [0.95, 0.95, 0.95]
+    bad_acc = [0, 0, 0]
+    assert compute_ece(bad_conf, bad_acc) > 0.80
+
+    # Brier score tests
+    assert np.isclose(compute_brier_score([1.0, 0.0], 0), 0.0)
+    assert np.isclose(compute_brier_score([1.0, 0.0], 1), 2.0)
+    assert np.isclose(compute_brier_score([0.5, 0.5], 0), 0.5)
 
 
 def test_jensen_shannon_divergence():
@@ -105,7 +143,7 @@ def test_build_dynamic_taxonomy():
         assert "transformer" in tax["Deep-Learning-Projects"]["keywords"]
 
 
-def test_rlcd_policy_store():
+def test_rlcd_policy_store_and_running_mean():
     with tempfile.TemporaryDirectory() as tmp_dir:
         policy_path = Path(tmp_dir) / "rlcd_policy.json"
         store = RLCDPolicyStore(policy_path, learning_rate=0.1)
@@ -120,12 +158,28 @@ def test_rlcd_policy_store():
             agreement=0.95,
             is_override=False,
             doc_embedding=np.array([1.0, 0.0, 0.0]),
+            confidence=0.92,
         )
         assert reward1 > 0
         assert store.episodes == 1
         assert store.agreements_count == 1
         assert store.biases["CS2227"] > 0
         assert "CS2227" in store.centroids
+
+        # Check running average centroid update:
+        old_centroid = np.array(store.centroids["CS2227"])
+        reward1_b = store.record_feedback(
+            chosen_category="CS2227",
+            predicted_category="CS2227",
+            agreement=0.90,
+            is_override=False,
+            doc_embedding=np.array([0.9, 0.1, 0.0]),
+            confidence=0.88,
+        )
+        new_centroid = np.array(store.centroids["CS2227"])
+        # Should stay well-aligned (cosine sim > 0.9)
+        assert np.dot(old_centroid, new_centroid) > 0.90
+        assert store.sample_counts["CS2227"] > 1
 
         # Feedback 2: User overrides prediction
         reward2 = store.record_feedback(
@@ -134,16 +188,25 @@ def test_rlcd_policy_store():
             agreement=0.40,
             is_override=True,
             doc_embedding=np.array([0.0, 1.0, 0.0]),
+            confidence=0.45,
         )
-        assert store.episodes == 2
+        assert store.episodes == 3
         assert store.overrides_count == 1
         assert store.biases["CS2000"] > 0
 
+        # Telemetry & ECE checks
+        telemetry = store.get_telemetry()
+        assert telemetry["episodes"] == 3
+        assert telemetry["agreements_count"] == 2
+        assert telemetry["overrides_count"] == 1
+        assert 0.0 <= telemetry["ece"] <= 1.0
+
         # Test reload from disk
         store2 = RLCDPolicyStore(policy_path)
-        assert store2.episodes == 2
+        assert store2.episodes == 3
         assert store2.overrides_count == 1
         assert "CS2227" in store2.biases
+        assert "CS2227" in store2.sample_counts
 
 
 def test_rlcd_routing_and_disagreement():
@@ -175,6 +238,7 @@ def test_rlcd_routing_and_disagreement():
         assert decision.agreement >= 0.75
         assert decision.status == STATUS_CONFIDENT
         assert decision.ranking[0][0] == "Machine Learning"
+        assert 0.0 <= decision.normalized_entropy <= 1.0
 
 
 def test_quick_extract_sample_and_library_training():
@@ -209,4 +273,29 @@ def test_quick_extract_sample_and_library_training():
         assert res["total_documents"] == 2
         assert "Maths" in policy_store.centroids
         assert "AI" in policy_store.centroids
+
+
+def test_query_chat_explanation():
+    from src.rlcd import query_chat_explanation
+
+    taxonomy = {
+        "Computer Science": {
+            "code": "CS101",
+            "name": "Computer Science",
+            "keywords": ["algorithms", "python", "programming", "data structures"],
+            "syllabus": "Foundations of computing",
+        },
+        "Literature": {
+            "code": "LIT101",
+            "name": "Literature",
+            "keywords": ["poetry", "prose", "shakespeare", "novel"],
+            "syllabus": "Literary analysis",
+        },
+    }
+
+    result = query_chat_explanation("Algorithms and data structures in Python programming", taxonomy)
+    assert result["decision"].subject == "Computer Science"
+    assert "Computer Science" in result["explanation"]
+    assert "Calibrated Confidence" in result["explanation"]
+    assert len(result["top3"]) > 0
 

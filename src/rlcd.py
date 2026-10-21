@@ -1,7 +1,8 @@
-"""RLCD: Reinforcement Learning from Classifier Disagreement.
+"""RLCD: Reinforcement Learning Calibrated Decision Engine.
 
 This module implements a calibrated document routing engine based on
-Reinforcement Learning from Classifier Disagreement (RLCD).
+Reinforcement Learning from Classifier Disagreement (RLCD) and contextual bandit
+policy optimization.
 
 Architecture
 ------------
@@ -11,8 +12,8 @@ Architecture
    falls back to the standard academic/work taxonomy.
 
 2. **Dual-Perspective Classifiers**:
-   - **Lexical Classifier (P_lex)**: Fast surface-token, course code, n-gram,
-     and keyword matching with calibrated tempered softmax.
+   - **Lexical Classifier (P_lex)**: Sublinear token-frequency and keyword
+     matching with length-normalized logits and calibrated tempered softmax.
    - **Semantic Bi-Encoder (P_sem)**: Dense 384-dimensional embedding matching
      (using ``all-MiniLM-L6-v2``) against dynamic category prototype centroids.
 
@@ -21,18 +22,21 @@ Architecture
    - Agreement Metric: Agreement = 1.0 - D_JS.
    - Ensemble Consensus: P_ens = 0.5 * (P_lex + P_sem).
    - Shannon Entropy: H(P_ens) = -sum(P_ens * log2(P_ens)).
+   - Normalized Entropy: H_norm(P_ens) = H(P_ens) / log2(K) in [0, 1].
 
 4. **Risk-Limiting Gate**:
    A decision is stamped ``CONFIDENT`` only when:
      - Consensus Confidence >= tau (e.g. 0.70)
      - Classifier Agreement >= 0.75 (Disagreement D_JS <= 0.25 bits)
-     - Shannon Entropy <= H_max (e.g. 1.50 bits)
+     - Normalized Entropy <= H_norm_max (or raw entropy <= H_max)
    Otherwise, it is marked ``AMBIGUOUS`` and queued for interactive review.
 
 5. **Reinforcement Learning Policy Store (RLCDPolicyStore)**:
-   Persists category biases, learned term weights, running centroids, and
-   episode telemetry to disk (`~/.config/sortwise/rlcd_policy.json`).
-   Applies policy-gradient updates when users confirm or override routing decisions.
+   Persists category policy weights, running exemplar centroids, calibration
+   telemetry (ECE, Brier score), and episode metrics to disk
+   (`~/.config/sortwise/rlcd_policy.json`).
+   Applies policy-gradient updates and non-catastrophic centroid updates
+   when users confirm or override routing decisions.
 """
 
 from __future__ import annotations
@@ -56,11 +60,16 @@ __all__ = [
     "RLCDPolicyStore",
     "RLCDRouter",
     "build_dynamic_taxonomy",
+    "compute_brier_score",
+    "compute_ece",
     "compute_jensen_shannon_divergence",
+    "compute_kl_divergence",
+    "compute_normalized_shannon_entropy",
     "compute_shannon_entropy",
     "discover_target_categories",
     "get_default_policy_store",
     "get_default_router",
+    "query_chat_explanation",
     "quick_extract_sample",
     "tempered_softmax",
     "train_prototypes_from_library",
@@ -70,6 +79,7 @@ DEFAULT_MODEL_NAME = "all-MiniLM-L6-v2"
 DEFAULT_TEMPERATURE = 0.15
 DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 DEFAULT_ENTROPY_THRESHOLD = 1.50
+DEFAULT_NORMALIZED_ENTROPY_THRESHOLD = 0.55
 MAX_DISAGREEMENT_FOR_CONFIDENT = 0.25  # JSD <= 0.25 bits means Agreement >= 75%
 
 STATUS_CONFIDENT = "CONFIDENT"
@@ -113,6 +123,20 @@ def compute_shannon_entropy(probabilities: Sequence[float] | np.ndarray) -> floa
     return float(-np.sum(p * np.log2(p)))
 
 
+def compute_normalized_shannon_entropy(probabilities: Sequence[float] | np.ndarray) -> float:
+    """Normalized Shannon Entropy H_norm(P) = H(P) / log2(K) in [0, 1]."""
+    p = np.asarray(probabilities, dtype=np.float64)
+    p = p[p > 0.0]
+    k = p.size
+    if k <= 1:
+        return 0.0
+    raw_h = float(-np.sum(p * np.log2(p)))
+    max_h = math.log2(k)
+    if max_h <= 0.0:
+        return 0.0
+    return float(np.clip(raw_h / max_h, 0.0, 1.0))
+
+
 def compute_kl_divergence(p: np.ndarray, q: np.ndarray) -> float:
     """Kullback-Leibler divergence D_KL(P || Q) in bits using log2."""
     eps = 1e-12
@@ -139,6 +163,45 @@ def compute_jensen_shannon_divergence(p: np.ndarray, q: np.ndarray) -> float:
     return float(np.clip(jsd, 0.0, 1.0))
 
 
+def compute_brier_score(probabilities: Sequence[float], ground_truth_idx: int) -> float:
+    """Multiclass Brier score: sum_k (p_k - y_k)^2 with one-hot y."""
+    p = np.asarray(probabilities, dtype=np.float64).ravel()
+    if p.size == 0:
+        return 0.0
+    if not 0 <= ground_truth_idx < p.size:
+        return 1.0
+    target = np.zeros_like(p)
+    target[ground_truth_idx] = 1.0
+    return float(np.sum((p - target) ** 2))
+
+
+def compute_ece(
+    confidences: Sequence[float],
+    accuracies: Sequence[bool | int],
+    num_bins: int = 10,
+) -> float:
+    """Expected Calibration Error (ECE): weighted average bin error between confidence and accuracy."""
+    conf = np.asarray(confidences, dtype=np.float64)
+    acc = np.asarray(accuracies, dtype=np.float64)
+    if conf.size == 0 or conf.size != acc.size:
+        return 0.0
+
+    bins = np.linspace(0.0, 1.0, num_bins + 1)
+    ece = 0.0
+    n = len(conf)
+
+    for i in range(num_bins):
+        low, high = bins[i], bins[i + 1]
+        mask = (conf >= low) & (conf <= high if i == num_bins - 1 else conf < high)
+        bin_count = int(np.sum(mask))
+        if bin_count > 0:
+            bin_acc = float(np.mean(acc[mask]))
+            bin_conf = float(np.mean(conf[mask]))
+            ece += (bin_count / n) * abs(bin_acc - bin_conf)
+
+    return float(ece)
+
+
 # --------------------------------------------------------------------------- #
 # Decision Data Record
 # --------------------------------------------------------------------------- #
@@ -156,6 +219,8 @@ class RLCDDecision:
     p_sem: dict[str, float]
     p_ens: dict[str, float]
     ranking: list[tuple[str, float]]
+    normalized_entropy: float = 0.0
+    doc_embedding: np.ndarray | None = None
 
     @property
     def confident(self) -> bool:
@@ -166,6 +231,7 @@ class RLCDDecision:
             "subject": self.subject,
             "confidence": self.confidence,
             "entropy": self.entropy,
+            "normalized_entropy": self.normalized_entropy,
             "status": self.status,
             "agreement": self.agreement,
             "disagreement": self.disagreement,
@@ -267,7 +333,7 @@ def build_dynamic_taxonomy(
 # Reinforcement Learning Policy Store
 # --------------------------------------------------------------------------- #
 class RLCDPolicyStore:
-    """Persistent storage for RLCD policy weights, biases, and centroids.
+    """Persistent storage for RLCD policy weights, biases, centroids, and calibration metrics.
 
     Thread-safe and persists to `~/.config/sortwise/rlcd_policy.json`.
     """
@@ -287,12 +353,14 @@ class RLCDPolicyStore:
         self.learning_rate = learning_rate
         self._lock = threading.Lock()
         self.biases: dict[str, float] = {}
+        self.sample_counts: dict[str, int] = {}
         self.term_weights: dict[str, dict[str, float]] = {}
         self.centroids: dict[str, list[float]] = {}
         self.episodes: int = 0
         self.agreements_count: int = 0
         self.overrides_count: int = 0
         self.cumulative_reward: float = 0.0
+        self.calibration_history: list[dict[str, Any]] = []
 
         self.load()
 
@@ -305,7 +373,10 @@ class RLCDPolicyStore:
                     data = json.load(f)
                 raw_biases = data.get("biases", {})
                 self.biases = {
-                    k: float(np.clip(float(v), -0.6, 0.6)) for k, v in raw_biases.items()
+                    k: float(np.clip(float(v), -1.5, 1.5)) for k, v in raw_biases.items()
+                }
+                self.sample_counts = {
+                    k: int(v) for k, v in data.get("sample_counts", {}).items()
                 }
                 self.term_weights = data.get("term_weights", {})
                 self.centroids = data.get("centroids", {})
@@ -313,6 +384,7 @@ class RLCDPolicyStore:
                 self.agreements_count = int(data.get("agreements_count", 0))
                 self.overrides_count = int(data.get("overrides_count", 0))
                 self.cumulative_reward = float(data.get("cumulative_reward", 0.0))
+                self.calibration_history = data.get("calibration_history", [])[-1000:]
             except Exception:
                 pass
 
@@ -320,12 +392,14 @@ class RLCDPolicyStore:
         with self._lock:
             data = {
                 "biases": self.biases,
+                "sample_counts": self.sample_counts,
                 "term_weights": self.term_weights,
                 "centroids": self.centroids,
                 "episodes": self.episodes,
                 "agreements_count": self.agreements_count,
                 "overrides_count": self.overrides_count,
                 "cumulative_reward": self.cumulative_reward,
+                "calibration_history": self.calibration_history[-1000:],
             }
             tmp_path = self.path.with_suffix(".tmp")
             try:
@@ -344,42 +418,80 @@ class RLCDPolicyStore:
         *,
         chosen_category: str,
         predicted_category: str,
-        agreement: float,
-        is_override: bool,
+        agreement: float = 1.0,
+        is_override: bool = False,
+        is_rejection: bool = False,
         doc_embedding: np.ndarray | None = None,
+        confidence: float | None = None,
+        probabilities: dict[str, float] | None = None,
     ) -> float:
-        """Apply a policy-gradient reinforcement update from user interaction.
+        """Apply a contextual policy-gradient reinforcement update from user interaction.
+
+        Updates policy weights theta (self.biases) using policy-gradient feedback,
+        updates category centroids via non-catastrophic running averages,
+        and logs confidence-accuracy telemetry for calibration assessment.
 
         Returns the computed reward.
         """
         with self._lock:
             self.episodes += 1
+            conf = float(confidence if confidence is not None else (0.95 if not is_override else 0.40))
+            agr = float(np.clip(agreement, 0.0, 1.0))
+
             if not is_override:
-                # User accepted the system prediction
-                reward = float(np.clip(1.0 * agreement, 0.2, 1.0))
+                # User accepted the system prediction (positive reinforcement)
+                # Reward increases with agreement and confidence
+                reward = float(np.clip(1.0 * agr, 0.2, 1.0))
                 self.agreements_count += 1
+
+                # Policy Gradient: grad_theta log pi(a | x) = I(a = chosen) - pi(a)
+                # When chosen accepted, reinforce chosen policy weight
+                prob_chosen = probabilities.get(chosen_category, 0.70) if probabilities else 0.70
+                grad_chosen = 1.0 - prob_chosen
                 current_bias = self.biases.get(chosen_category, 0.0)
-                # Policy gradient update on category bias with calibrated bounding [-0.6, 0.6]
                 self.biases[chosen_category] = float(
-                    np.clip(current_bias + self.learning_rate * reward, -0.6, 0.6)
+                    np.clip(current_bias + self.learning_rate * grad_chosen * reward + 0.05 * reward, -1.5, 1.5)
+                )
+
+                # Mildly penalize competing alternatives if full distribution was supplied
+                if probabilities and len(probabilities) > 1:
+                    for cat, p_val in probabilities.items():
+                        if cat != chosen_category:
+                            c_bias = self.biases.get(cat, 0.0)
+                            self.biases[cat] = float(
+                                np.clip(c_bias - self.learning_rate * p_val * reward * 0.5, -1.5, 1.5)
+                            )
+            elif is_rejection:
+                # Explicit user rejection (negative reinforcement on incorrect action)
+                reward = float(-1.0 * (1.0 - agr * 0.5))
+                self.overrides_count += 1
+                pred_bias = self.biases.get(predicted_category, 0.0)
+                penalty = self.learning_rate * 1.2
+                self.biases[predicted_category] = float(
+                    np.clip(pred_bias - penalty, -1.5, 1.5)
                 )
             else:
-                # User corrected the system prediction
-                reward = -0.5 * (1.0 - agreement)
+                # User corrected the system prediction (negative reinforcement / policy penalty)
+                reward = float(-0.5 * (1.0 - agr) - 0.2)
                 self.overrides_count += 1
-                # Increase chosen category bias, decrease rejected category bias with calibrated bounds
+
                 pred_bias = self.biases.get(predicted_category, 0.0)
                 chosen_bias = self.biases.get(chosen_category, 0.0)
+
+                # Penalize wrongly predicted action, reward user-selected ground truth action
+                penalty = self.learning_rate * (1.0 - agr + 0.1)
+                boost = self.learning_rate * 1.0
                 self.biases[predicted_category] = float(
-                    np.clip(pred_bias - self.learning_rate * (1.0 - agreement + 0.1), -0.6, 0.6)
+                    np.clip(pred_bias - penalty, -1.5, 1.5)
                 )
                 self.biases[chosen_category] = float(
-                    np.clip(chosen_bias + self.learning_rate * 1.0, -0.6, 0.6)
+                    np.clip(chosen_bias + boost, -1.5, 1.5)
                 )
 
             self.cumulative_reward += reward
 
-            # Update semantic centroid if vector is provided
+            # Robust Running Mean Update on Semantic Centroid
+            # Prevents catastrophic forgetting of curriculum syllabus
             if doc_embedding is not None and doc_embedding.size > 0:
                 vec = np.asarray(doc_embedding, dtype=np.float64).ravel()
                 norm = np.linalg.norm(vec)
@@ -387,23 +499,66 @@ class RLCDPolicyStore:
                     vec = vec / norm
                     if chosen_category in self.centroids:
                         old_centroid = np.asarray(self.centroids[chosen_category], dtype=np.float64)
-                        updated = (1.0 - self.learning_rate) * old_centroid + self.learning_rate * vec
+                        # Use sample count prior: N starts at 5 for initialized syllabus facets
+                        n_samples = self.sample_counts.get(chosen_category, 5)
+                        updated = (n_samples * old_centroid + vec) / (n_samples + 1)
+                        self.sample_counts[chosen_category] = n_samples + 1
                         updated_norm = np.linalg.norm(updated)
                         if updated_norm > 0:
                             updated = updated / updated_norm
                         self.centroids[chosen_category] = [round(float(x), 6) for x in updated]
                     else:
                         self.centroids[chosen_category] = [round(float(x), 6) for x in vec]
+                        self.sample_counts[chosen_category] = 1
+
+            # Log telemetry for calibration assessment (ECE & Brier score)
+            self.calibration_history.append(
+                {
+                    "episode": self.episodes,
+                    "confidence": conf,
+                    "correct": not is_override,
+                    "agreement": agr,
+                    "reward": reward,
+                }
+            )
 
         self.save()
         return reward
+
+    def compute_current_ece(self, num_bins: int = 10) -> float:
+        """Compute Expected Calibration Error from recorded episodes."""
+        with self._lock:
+            if not self.calibration_history:
+                return 0.0
+            confs = [item["confidence"] for item in self.calibration_history]
+            accs = [1 if item["correct"] else 0 for item in self.calibration_history]
+            return compute_ece(confs, accs, num_bins=num_bins)
+
+    def get_telemetry(self) -> dict[str, Any]:
+        """Return comprehensive RLCD policy telemetry."""
+        with self._lock:
+            confs = [item["confidence"] for item in self.calibration_history]
+            accs = [1 if item["correct"] else 0 for item in self.calibration_history]
+            ece = compute_ece(confs, accs) if confs else 0.0
+            acc = float(np.mean(accs)) if accs else 1.0
+            return {
+                "episodes": self.episodes,
+                "agreements_count": self.agreements_count,
+                "overrides_count": self.overrides_count,
+                "agreement_rate": (self.agreements_count / max(1, self.episodes)),
+                "cumulative_reward": self.cumulative_reward,
+                "average_accuracy": acc,
+                "ece": ece,
+                "categories_tracked": len(self.biases),
+                "centroids_tracked": len(self.centroids),
+            }
 
 
 # --------------------------------------------------------------------------- #
 # RLCD Dual-Perspective Router Engine
 # --------------------------------------------------------------------------- #
 class RLCDRouter:
-    """Reinforcement Learning from Classifier Disagreement Router."""
+    """Reinforcement Learning Calibrated Decision (RLCD) Dual-Perspective Router."""
 
     def __init__(
         self,
@@ -439,14 +594,41 @@ class RLCDRouter:
                         self._model = None
         return self._model
 
+    def adapt_prototype(
+        self,
+        category: str,
+        doc_embedding: Sequence[float] | np.ndarray,
+        alpha: float = 0.15,
+    ) -> None:
+        """Incrementally adjust the semantic prototype vector for a category."""
+        vec = np.asarray(doc_embedding, dtype=np.float64)
+        if vec.size == 0 or np.linalg.norm(vec) == 0:
+            return
+        vec = vec / np.linalg.norm(vec)
+        if category in self.policy_store.centroids:
+            old = np.asarray(self.policy_store.centroids[category], dtype=np.float64)
+            updated = (1.0 - alpha) * old + alpha * vec
+            norm = np.linalg.norm(updated)
+            if norm > 0:
+                updated = updated / norm
+            self.policy_store.centroids[category] = [round(float(x), 6) for x in updated]
+        else:
+            self.policy_store.centroids[category] = [round(float(x), 6) for x in vec]
+        self._cached_centroids.clear()
+        self.policy_store.save()
+
     # -- Classifier 1: Lexical (P_lex) ------------------------------------- #
     def score_lexical(
         self, text: str, taxonomy: dict[str, dict]
     ) -> dict[str, float]:
-        """Compute surface lexical and n-gram overlap scores."""
+        """Compute surface lexical and n-gram overlap scores with sublinear length scaling."""
         clean = normalise_text(text)
         padded = f" {clean} " if clean else " "
         tokens = set(clean.split())
+        token_count = len(tokens)
+
+        # Sublinear length dampening factor
+        norm_factor = 1.0 + 0.08 * math.log(max(1, token_count))
 
         has_match = False
         raw_scores: dict[str, float] = {}
@@ -470,18 +652,19 @@ class RLCDRouter:
                     elif kw_norm in tokens:
                         score += 1.0
 
-            raw_scores[label] = score
+            raw_scores[label] = score / norm_factor
             if score > 0:
                 has_match = True
 
         scores: dict[str, float] = {}
         for label in taxonomy:
             raw = raw_scores.get(label, 0.0)
+            bias = float(np.clip(self.policy_store.get_bias(label), -1.5, 1.5))
             if has_match:
-                bias = float(np.clip(self.policy_store.get_bias(label), -0.6, 0.6))
-                scores[label] = max(0.0, raw + bias * 0.35)
+                scores[label] = max(0.0, raw + bias * 0.40)
             else:
-                scores[label] = max(0.0, raw)
+                # Even without exact lexical match, small learned policy preference applies
+                scores[label] = max(0.0, raw + max(0.0, bias * 0.15))
 
         return scores
 
@@ -544,7 +727,7 @@ class RLCDRouter:
 
         try:
             doc_vec = model.encode(
-                [text[:2000]],
+                [text[:4000]],
                 convert_to_numpy=True,
                 normalize_embeddings=True,
             )[0]
@@ -554,7 +737,7 @@ class RLCDRouter:
         for label, centroid in centroids.items():
             if np.linalg.norm(centroid) > 0:
                 sim = float(np.dot(centroid, doc_vec))
-                # Scale cosine similarity [-1, 1] to positive logit [0, 2]
+                # Map cosine similarity [-1, 1] to centered logit [0, 2]
                 scores[label] = max(0.0, (sim + 1.0))
             else:
                 scores[label] = 0.0
@@ -586,6 +769,8 @@ class RLCDRouter:
                 p_sem={},
                 p_ens={},
                 ranking=[],
+                normalized_entropy=0.0,
+                doc_embedding=None,
             )
             return empty, None
 
@@ -596,8 +781,9 @@ class RLCDRouter:
         lex_raw = [lex_scores.get(lbl, 0.0) for lbl in labels]
         sem_raw = [sem_scores.get(lbl, 0.0) for lbl in labels]
 
-        # 2. Tempered Softmax Distributions
-        p_lex = tempered_softmax(lex_raw, temp)
+        # 2. Tempered Softmax Distributions with scale-matched temperatures
+        # Lexical distribution uses a slightly softer temperature to balance semantic logits
+        p_lex = tempered_softmax(lex_raw, temp * 1.2 if temp <= 0.2 else temp)
         p_sem = tempered_softmax(sem_raw, temp)
 
         # 3. Disagreement Quantification (Jensen-Shannon Divergence)
@@ -606,7 +792,8 @@ class RLCDRouter:
 
         # 4. Ensemble Posterior Consensus
         p_ens = 0.5 * (p_lex + p_sem)
-        entropy = compute_shannon_entropy(p_ens)
+        raw_entropy = compute_shannon_entropy(p_ens)
+        norm_entropy = compute_normalized_shannon_entropy(p_ens)
 
         # 5. Ranking & Winning Category
         ranking_indices = sorted(range(len(labels)), key=lambda i: p_ens[i], reverse=True)
@@ -617,12 +804,17 @@ class RLCDRouter:
         confidence = float(p_ens[winner_idx])
 
         # 6. Risk-Limiting Calibrated Gate
-        # Confident only when confidence is high AND classifiers strongly agree
-        # AND distribution entropy is low
+        # Support both raw bits threshold (>1.0) and normalized entropy threshold (<=1.0)
+        max_entropy = math.log2(len(labels)) if len(labels) > 1 else 1.0
+        if entropy_threshold > 1.0:
+            is_entropy_ok = (raw_entropy <= entropy_threshold)
+        else:
+            is_entropy_ok = (norm_entropy <= entropy_threshold)
+
         is_confident = (
             confidence >= threshold
             and disagreement <= MAX_DISAGREEMENT_FOR_CONFIDENT
-            and entropy <= entropy_threshold
+            and is_entropy_ok
         )
         status = STATUS_CONFIDENT if is_confident else STATUS_AMBIGUOUS
 
@@ -633,7 +825,7 @@ class RLCDRouter:
         decision = RLCDDecision(
             subject=winner_label,
             confidence=confidence,
-            entropy=entropy,
+            entropy=raw_entropy,
             status=status,
             agreement=agreement,
             disagreement=disagreement,
@@ -641,6 +833,8 @@ class RLCDRouter:
             p_sem=p_sem_map,
             p_ens=p_ens_map,
             ranking=ranking,
+            normalized_entropy=norm_entropy,
+            doc_embedding=doc_embedding,
         )
         return decision, doc_embedding
 
@@ -669,7 +863,7 @@ def get_default_router() -> RLCDRouter:
 # --------------------------------------------------------------------------- #
 # Library Document Training & Quick Sampling
 # --------------------------------------------------------------------------- #
-def quick_extract_sample(path: str | Path, max_chars: int = 2000) -> str:
+def quick_extract_sample(path: str | Path, max_chars: int = 4000) -> str:
     """Quickly extract leading text from a document to allow content-aware classification."""
     p = Path(path)
     if not p.is_file():
@@ -683,7 +877,7 @@ def quick_extract_sample(path: str | Path, max_chars: int = 2000) -> str:
             import pymupdf
             doc = pymupdf.open(str(p))
             parts: list[str] = []
-            for page in doc[:3]:
+            for page in doc[:5]:
                 t = page.get_text("text").strip()
                 if t:
                     parts.append(t)
@@ -746,11 +940,11 @@ def train_prototypes_from_library(
                             cat_texts.append(text_body)
                             total_words += edoc.word_count
                     except Exception:
-                        sample = quick_extract_sample(file_path, 2000)
+                        sample = quick_extract_sample(file_path, 4000)
                         if sample:
                             cat_texts.append(f"{file_path.stem}\n{sample}")
                 elif ext in ("txt", "md"):
-                    sample = quick_extract_sample(file_path, 2000)
+                    sample = quick_extract_sample(file_path, 4000)
                     if sample:
                         cat_texts.append(f"{file_path.stem}\n{sample}")
                         total_words += len(sample.split())
@@ -766,6 +960,7 @@ def train_prototypes_from_library(
                     if norm > 0:
                         centroid = centroid / norm
                         store.centroids[cat] = [round(float(x), 6) for x in centroid]
+                        store.sample_counts[cat] = len(cat_texts)
                 except Exception:
                     pass
 
@@ -784,3 +979,62 @@ def train_prototypes_from_library(
         "total_words": total_words,
         "category_counts": trained_stats,
     }
+
+
+def query_chat_explanation(
+    text: str,
+    taxonomy: dict[str, dict],
+    router: RLCDRouter | None = None,
+) -> dict[str, Any]:
+    """Provide a conversational RLCD routing explanation for chat queries."""
+    r = router or get_default_router()
+    decision, doc_vec = r.classify(text, taxonomy)
+
+    clean = normalise_text(text)
+    tokens = set(clean.split())
+    matched_kws: list[str] = []
+    win_entry = taxonomy.get(decision.subject, {})
+    for kw in win_entry.get("keywords", []):
+        norm_kw = normalise_text(str(kw))
+        if norm_kw and (norm_kw in tokens or f" {norm_kw} " in f" {clean} "):
+            matched_kws.append(kw)
+
+    explanation = (
+        f"RLCD Dual-Perspective Evaluation:\n\n"
+        f"Selected Category: {decision.subject}\n"
+        f"Calibrated Confidence: {decision.confidence * 100:.1f}%\n"
+        f"Normalized Entropy: {decision.normalized_entropy:.2f} (Gate: {decision.status})\n"
+        f"Dual-Classifier Agreement: {decision.agreement * 100:.1f}% (Disagreement: {decision.disagreement:.3f} bits)\n"
+    )
+    if matched_kws:
+        explanation += f"Matching Topic Keywords: {', '.join(matched_kws[:6])}\n"
+
+    top3 = decision.ranking[:3]
+    top3_str = ", ".join(f"{lbl} ({prob * 100:.1f}%)" for lbl, prob in top3)
+    explanation += f"Candidate Rankings: {top3_str}\n\n"
+
+    is_uncertainty_query = (
+        not decision.confident
+        or decision.normalized_entropy >= 0.50
+        or decision.disagreement > 0.20
+    )
+    candidate_options = [lbl for lbl, _ in top3]
+
+    if decision.confident and not is_uncertainty_query:
+        explanation += "The decision cleared both calibrated confidence (>= 70%) and disagreement (<= 0.25b) gates."
+    else:
+        explanation += (
+            "⚠️ Active Learning Uncertainty Gate Triggered: Decision uncertainty is elevated. "
+            "Please select the target domain to reinforce policy gradient ascent and reduce entropy."
+        )
+
+    return {
+        "explanation": explanation,
+        "decision": decision,
+        "doc_embedding": doc_vec,
+        "top3": top3,
+        "matched_keywords": matched_kws,
+        "is_uncertainty_query": is_uncertainty_query,
+        "candidate_options": candidate_options,
+    }
+

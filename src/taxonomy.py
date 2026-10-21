@@ -285,18 +285,40 @@ def subject_labels(custom_taxonomy: dict[str, dict] | None = None) -> list[str]:
     return list(SUBJECT_TAXONOMY.keys())
 
 
-def discover_target_taxonomy(target_root_path: str) -> dict[str, dict]:
-    """Dynamically build a taxonomy from subfolders existing in target_root.
+def discover_target_taxonomy(target_root_path: str, fallback_path: str | None = None) -> dict[str, dict]:
+    """Dynamically build a taxonomy from subfolders existing in target_root or fallback_path.
     
-    If subfolders match known taxonomy keys or codes, merge their rich keywords.
-    Otherwise, derive keywords and prototypes from the folder name.
+    Derives categories, keywords, and prototypes purely from the directories on disk.
+    Never returns hardcoded academic courses unless those folders actually exist.
     """
     from pathlib import Path
     root = Path(target_root_path).expanduser().resolve()
-    if not root.is_dir():
-        return get_subject_taxonomy()
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
-    subdirs = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    subdirs = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")] if root.is_dir() else []
+
+    # If target_root is empty or has no subfolders, inspect fallback_path (e.g. watch_folder)
+    if not subdirs and fallback_path:
+        fb = Path(fallback_path).expanduser().resolve()
+        if fb.is_dir():
+            subdirs = [p for p in fb.iterdir() if p.is_dir() and not p.name.startswith(".") and p.resolve() != root]
+
+
+    # If custom user categories file exists, use them
+    custom_cfg = Path.home() / ".config" / "sortwise" / "custom_categories.json"
+    if not subdirs and custom_cfg.is_file():
+        try:
+            import json
+            with open(custom_cfg, "r") as f:
+                saved = json.load(f)
+            if isinstance(saved, dict) and saved:
+                return saved
+        except Exception:
+            pass
+
     if not subdirs:
         return get_subject_taxonomy()
 
@@ -327,5 +349,5 @@ def discover_target_taxonomy(target_root_path: str) -> dict[str, dict]:
                 "syllabus": f"Documents, coursework, materials and references concerning {clean_name}.",
             }
 
-    return discovered if discovered else get_subject_taxonomy()
+    return discovered
 

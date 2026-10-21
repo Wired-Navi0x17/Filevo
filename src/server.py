@@ -450,7 +450,7 @@ class SortwiseService:
 
     # -- taxonomy ---------------------------------------------------------- #
     def current_taxonomy(self, config: SortwiseConfig) -> dict[str, dict]:
-        return discover_target_taxonomy(config.target_root)
+        return discover_target_taxonomy(config.target_root, config.watch_folder)
 
     def subject_folder_name(self, label: str, config: SortwiseConfig) -> str:
         taxonomy = self.current_taxonomy(config)
@@ -555,7 +555,7 @@ class SortwiseService:
         title, first heading, or the original stem); the remaining placeholders
         come from the routed subject when one is known.
         """
-        entry = discover_target_taxonomy(config.target_root).get(subject or "", {})
+        entry = discover_target_taxonomy(config.target_root, config.watch_folder).get(subject or "", {})
         mapping = {
             "title": doc.title or Path(doc.path).stem,
             "stem": Path(doc.path).stem,
@@ -697,6 +697,8 @@ class SortwiseService:
                         predicted_category=decision.subject if not telemetry_error else chosen,
                         agreement=getattr(decision, "agreement", 1.0),
                         is_override=manual and (chosen != getattr(decision, "subject", chosen)),
+                        doc_embedding=getattr(decision, "doc_embedding", None),
+                        confidence=getattr(decision, "confidence", None),
                     )
                 except Exception:
                     pass
@@ -1047,6 +1049,13 @@ def create_app(
             "count": len(items),
             "subjects": items,
         }
+
+    # -- RLCD telemetry ---------------------------------------------------- #
+    @app.get("/api/rlcd/telemetry")
+    def rlcd_telemetry() -> dict[str, Any]:
+        from .rlcd import get_default_policy_store
+        ps = get_default_policy_store()
+        return ps.get_telemetry()
 
     # -- scanning ---------------------------------------------------------- #
     @app.get("/api/scan")

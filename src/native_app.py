@@ -387,6 +387,12 @@ from src.scanner import (
     preset_targets,
     rate_document,
 )
+from src.views import (
+    ModelChatView,
+    SettingsView,
+    TrainingView,
+    WordCreatorView,
+)
 
 __all__ = [
     "APP_NAME",
@@ -407,10 +413,10 @@ __all__ = [
 
 APP_NAME = "Sortwise"
 WINDOW_TITLE = "Sortwise - Calibrated Document Router"
-WINDOW_SIZE = (1600, 1020)
-MIN_WINDOW_SIZE = (1320, 880)
+WINDOW_SIZE = (1180, 760)
+MIN_WINDOW_SIZE = (420, 320)
 
-SIDEBAR_WIDTH = 320
+SIDEBAR_WIDTH = 250
 SHELF_HEIGHT = 196
 LEDGER_HEIGHT = 240
 INSPECTOR_WIDTH = 440
@@ -867,7 +873,7 @@ def build_document_tree(
             kind="folder",
             path=str(folder),
             subject=label,
-            card=SUBJECT_TO_CARD.get(label) or f"custom_{label.lower()}",
+            card=SUBJECT_TO_CARD.get(label) or f"custom_{label.lower().replace(' ', '_')}",
             exists=folder.is_dir(),
         )
         node.children = [make_file(record, subject=label) for record in scan_dir(folder)]
@@ -993,12 +999,12 @@ def inspect_document(path: str | os.PathLike[str]) -> dict[str, Any]:
     return info
 
 
-def suggest_filename(title: str, subject_label: str | None, file_type: str) -> str:
-    """Smart default: ``"CS2806 - Calculus notes.pdf"`` style."""
+def suggest_filename(title: str, subject_label: str | None, file_type: str, taxonomy: dict[str, dict] | None = None) -> str:
+    """Smart default suggestion based on title and subject."""
     stem = (title or "").strip() or "document"
     code = ""
-    if subject_label:
-        code = str(get_subject_taxonomy().get(subject_label, {}).get("code", "") or "")
+    if subject_label and taxonomy:
+        code = str(taxonomy.get(subject_label, {}).get("code", "") or "")
     if code and not stem.casefold().startswith(code.casefold()):
         stem = f"{code} - {stem}"
     stem = sanitize_filename(stem, fallback="document")
@@ -1207,7 +1213,7 @@ class SettingsDialog(ctk.CTkToplevel):
         btn_box.grid(row=row + 1, column=1, sticky="e", padx=(0, 20), pady=(0, 2))
 
         ctk.CTkButton(
-            btn_box, text="📁 Browse…", width=100, height=44, corner_radius=self._theme.RADIUS_SMALL,
+            btn_box, text="Browse…", width=100, height=44, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.ELEVATED, hover_color=self._theme.HOVER, border_width=1,
             border_color=self._theme.BORDER, text_color=self._theme.TEXT,
             font=self._theme.ui_font(self._theme.FONT_BASE), command=lambda: self._browse(entry),
@@ -1325,7 +1331,7 @@ class TrainingDialog(ctk.CTkToplevel):
         self._path_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
 
         ctk.CTkButton(
-            path_box, text="📁 Browse…", width=110, height=42,
+            path_box, text="Browse…", width=110, height=42,
             corner_radius=theme.RADIUS_SMALL,
             fg_color=theme.ELEVATED, hover_color=theme.HOVER,
             border_width=1, border_color=theme.BORDER,
@@ -1396,7 +1402,7 @@ class TrainingDialog(ctk.CTkToplevel):
         self._close_btn.pack(side="left")
 
         self._train_btn = ctk.CTkButton(
-            footer, text="🚀 Train Models", width=160, height=40,
+            footer, text="Train Models", width=160, height=40,
             corner_radius=theme.RADIUS_SMALL,
             fg_color=theme.ACCENT, hover_color=theme.ACCENT_DEEP, text_color="#ffffff",
             font=theme.ui_font(theme.FONT_BUTTON, "bold"), command=self._start_training,
@@ -1441,10 +1447,10 @@ class TrainingDialog(ctk.CTkToplevel):
             self._status_lbl.configure(text="No category subfolders found in selected directory.", text_color=self._theme.WARN)
             msg = ctk.CTkLabel(
                 self._preview_scroll,
-                text="⚠️ No category subfolders found directly inside this folder.\n\n"
-                     "Sortwise trains prototype centroids from course/subject subdirectories\n"
-                     "(e.g., 'Semester 3/CS2227 - AI and ML', 'Semester 3/CS2203 - DBMS', etc.).\n\n"
-                     "Please select a parent folder that contains your organized course folders.",
+                text="No category subfolders found directly inside this folder.\n\n"
+                     "Sortwise trains prototype centroids from category subdirectories\n"
+                     "(e.g., 'Invoices', 'Research_Papers', 'Projects', etc.).\n\n"
+                     "Please select a parent folder that contains your organized category folders.",
                 font=self._theme.ui_font(self._theme.FONT_BASE),
                 text_color=self._theme.TEXT_MUTED,
                 justify="left",
@@ -1469,7 +1475,7 @@ class TrainingDialog(ctk.CTkToplevel):
 
         header_lbl = ctk.CTkLabel(
             self._preview_scroll,
-            text=f"✓ Detected {len(cats)} categories ({total_docs} supported documents):",
+            text=f"Detected {len(cats)} categories ({total_docs} supported documents):",
             font=self._theme.ui_font(self._theme.FONT_BASE, "bold"),
             text_color=self._theme.TEXT, anchor="w",
         )
@@ -1481,7 +1487,7 @@ class TrainingDialog(ctk.CTkToplevel):
             row.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(
-                row, text=f"📁 {cat}",
+                row, text=f"• {cat}",
                 font=self._theme.mono_font(self._theme.FONT_MONO_SMALL),
                 text_color=self._theme.TEXT_MUTED, anchor="w",
             ).grid(row=0, column=0, sticky="w")
@@ -1537,10 +1543,10 @@ class TrainingDialog(ctk.CTkToplevel):
             n_docs = res.get("total_documents", 0)
             n_cats = res.get("categories_trained", 0)
             self._status_lbl.configure(
-                text=f"✅ Calibration complete! {n_docs} documents trained across {n_cats} categories.",
+                text=f"Calibration complete: {n_docs} documents trained across {n_cats} categories.",
                 text_color=self._theme.SUCCESS,
             )
-            self._train_btn.configure(text="✅ Trained", state="disabled")
+            self._train_btn.configure(text="Trained", state="disabled")
             self._close_btn.configure(state="normal", text="Done")
             try:
                 self._on_complete()
@@ -1548,14 +1554,14 @@ class TrainingDialog(ctk.CTkToplevel):
                 pass
         else:
             msg = res.get("message", "Training encountered an error.")
-            self._status_lbl.configure(text=f"⚠️ {msg}", text_color=self._theme.WARN)
-            self._train_btn.configure(text="🚀 Try Again", state="normal")
+            self._status_lbl.configure(text=f"Notice: {msg}", text_color=self._theme.WARN)
+            self._train_btn.configure(text="Try Again", state="normal")
             self._close_btn.configure(state="normal")
 
     def _on_error(self, exc: Exception) -> None:
         self._is_training = False
-        self._status_lbl.configure(text=f"❌ Training failed: {exc}", text_color=self._theme.WARN)
-        self._train_btn.configure(text="🚀 Try Again", state="normal")
+        self._status_lbl.configure(text=f"Training failed: {exc}", text_color=self._theme.WARN)
+        self._train_btn.configure(text="Try Again", state="normal")
         self._close_btn.configure(state="normal")
 
     def _on_close(self) -> None:
@@ -2137,8 +2143,63 @@ class SortwiseApp(ctk.CTk):
 
         self._build_topnav(main)
         self._build_bulk_toolbar(main)
-        self._build_content(main)
+
+        # Tab views container
+        self._view_organizer = ctk.CTkFrame(main, fg_color="transparent")
+        self._view_organizer.grid(row=2, column=0, sticky="nsew")
+        self._view_organizer.grid_columnconfigure(0, weight=1)
+        self._view_organizer.grid_rowconfigure(0, weight=1)
+
+        self._build_content(self._view_organizer)
+
+        # In-window alternative views
+        self._view_chat = ModelChatView(main, self._config_store)
+        self._view_word = WordCreatorView(main, self._config_store)
+        self._view_training = TrainingView(main, self._config_store)
+        self._view_settings = SettingsView(
+            main,
+            self._config_store,
+            on_save_callback=self._apply_settings,
+            on_close_callback=lambda: self.switch_view_tab("Organizer"),
+            theme=self._theme,
+        )
+
+        self._views_map = {
+            "Organizer": self._view_organizer,
+            "Model Chat": self._view_chat,
+            "Training": self._view_training,
+            "Settings": self._view_settings,
+        }
+        self._current_tab = "Model Chat"
+
         self._build_ledger(main)
+        self.after(10, lambda: self.switch_view_tab("Model Chat"))
+
+    def switch_view_tab(self, tab_name: str) -> None:
+        if tab_name not in self._views_map:
+            return
+        self._current_tab = tab_name
+        for name, frame in self._views_map.items():
+            if name == tab_name:
+                frame.grid(row=2, column=0, sticky="nsew")
+            else:
+                frame.grid_forget()
+
+        # Update button highlights
+        for name, btn in getattr(self, "_tab_buttons", {}).items():
+            if name == tab_name:
+                btn.configure(fg_color=self._theme.ACCENT, text_color="#ffffff")
+            else:
+                btn.configure(fg_color="transparent", text_color=self._theme.TEXT_MUTED)
+
+        if tab_name == "Organizer":
+            if hasattr(self, "_topnav_actions") and self._topnav_actions:
+                self._topnav_actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 10))
+            self._ledger_card.grid(row=3, column=0, sticky="ew")
+        else:
+            if hasattr(self, "_topnav_actions") and self._topnav_actions:
+                self._topnav_actions.grid_remove()
+            self._ledger_card.grid_forget()
 
     def _card(self, parent: tk.Misc, **kwargs: Any) -> ctk.CTkFrame:
         options: dict[str, Any] = {
@@ -2307,6 +2368,28 @@ class SortwiseApp(ctk.CTk):
         )
         self._crumb_label.pack(side="left", padx=(0, 8))
 
+        # Unified App In-Window Tabs (Organizer, Model Chat, Word Creator, Training, Settings)
+        tabs_frame = ctk.CTkFrame(bar, fg_color=self._theme.BG, corner_radius=self._theme.RADIUS_SMALL,
+                                  border_width=1, border_color=self._theme.BORDER)
+        tabs_frame.grid(row=0, column=1, sticky="w", padx=(6, 6), pady=(8, 4))
+        self._tab_buttons = {}
+        tab_names = ["Model Chat", "Organizer", "Training", "Settings"]
+        for tname in tab_names:
+            tbtn = ctk.CTkButton(
+                tabs_frame,
+                text=tname,
+                width=88 if len(tname) <= 8 else 104,
+                height=30,
+                corner_radius=self._theme.RADIUS_SMALL - 2,
+                fg_color=self._theme.ACCENT if tname == "Model Chat" else "transparent",
+                hover_color=self._theme.HOVER,
+                text_color="#ffffff" if tname == "Model Chat" else self._theme.TEXT_MUTED,
+                font=self._ui_font(self._theme.FONT_BUTTON, "bold" if tname == "Model Chat" else "normal"),
+                command=lambda n=tname: self.switch_view_tab(n),
+            )
+            tbtn.pack(side="left", padx=2, pady=2)
+            self._tab_buttons[tname] = tbtn
+
         self._search = ctk.CTkEntry(
             bar, width=280, height=36, corner_radius=self._theme.RADIUS_SMALL,
             fg_color=self._theme.BG, border_color=self._theme.BORDER,
@@ -2319,21 +2402,22 @@ class SortwiseApp(ctk.CTk):
         # Row 1: Actions & Controls Bar (Clean visual groups with clear separation)
         actions = ctk.CTkFrame(bar, fg_color="transparent")
         actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 10))
+        self._topnav_actions = actions
 
         # Source: only one option for folder, only one for file
         self._pick_folder_button = self._action_button(
-            actions, "📁 Open Folder", self.pick_custom_folder, accent=False, width=126, height=36
+            actions, "Open Folder", self.pick_custom_folder, accent=False, width=110, height=36
         )
         self._scan_disk_button = self._pick_folder_button  # alias for backward-compatibility
         self._pick_file_button = self._action_button(
-            actions, "📄 Open File", self.pick_custom_file, accent=False, width=110, height=36
+            actions, "Open File", self.pick_custom_file, accent=False, width=100, height=36
         )
 
         self._vsep(actions)
 
         # Routing & Mode
         self._auto_button = self._action_button(
-            actions, "⚡ Auto-Route", self.auto_route_confident, accent=True, width=118, height=36
+            actions, "Auto-Route", self.auto_route_confident, accent=True, width=110, height=36
         )
 
         # Segmented Copy vs Cut Mode toggle
@@ -2359,13 +2443,13 @@ class SortwiseApp(ctk.CTk):
 
         # Group 3: History & Settings
         self._undo_button = self._action_button(
-            actions, "↩ Undo", self.undo_last, accent=False, width=78, height=36
+            actions, "Undo", self.undo_last, accent=False, width=78, height=36
         )
         self._train_button = self._action_button(
-            actions, "🧠 Train Library", self.train_library_models, accent=False, width=128, height=36
+            actions, "Train Library", lambda: self.switch_view_tab("Training"), accent=False, width=116, height=36
         )
         self._settings_button = self._action_button(
-            actions, "⚙ Settings", self.open_settings, accent=False, width=95, height=36
+            actions, "Settings", lambda: self.switch_view_tab("Settings"), accent=False, width=90, height=36
         )
 
         self._mode_label = ctk.CTkLabel(actions, text="", font=self._mono_font(self._theme.FONT_MONO_SMALL),
@@ -2417,7 +2501,7 @@ class SortwiseApp(ctk.CTk):
         header = ctk.CTkFrame(card, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 2))
         header.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(header, text="SEMESTER 3", font=self._ui_font(self._theme.FONT_SUBHEADER, "bold"),
+        ctk.CTkLabel(header, text="WORKSPACE SHELVES", font=self._ui_font(self._theme.FONT_SUBHEADER, "bold"),
                      text_color=self._theme.TEXT, anchor="w").grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(header, text="Click a folder to filter · double-click the table to open",
                      font=self._ui_font(self._theme.FONT_HINT), text_color=self._theme.TEXT_FAINT, anchor="w").grid(
@@ -2428,10 +2512,30 @@ class SortwiseApp(ctk.CTk):
 
         strip = ctk.CTkFrame(card, fg_color="transparent")
         strip.grid(row=1, column=0, sticky="nsew", padx=12, pady=(2, 10))
-        for column in range(len(SHELF_CARDS)):
+        active_cards = self._get_active_shelf_cards()
+        for column in range(len(active_cards)):
             strip.grid_columnconfigure(column, weight=1, uniform="shelf")
-        for column, (card_key, label, icon_name) in enumerate(SHELF_CARDS):
+        for column, (card_key, label, icon_name) in enumerate(active_cards):
             self._shelf_cards[card_key] = self._shelf_card(strip, column, card_key, label, icon_name)
+
+    def _get_active_shelf_cards(self) -> list[tuple[str, str, str]]:
+        cards = [
+            ("documents", "Documents", "folder-documents.png"),
+            ("downloads", "Downloads", "folder-downloads.png"),
+        ]
+        try:
+            tax = self._service.current_taxonomy(self._config)
+            for label in tax.keys():
+                card_key = SUBJECT_TO_CARD.get(label) or f"custom_{label.lower().replace(' ', '_')}"
+                icon_name = SUBJECT_ICONS.get(label, "folder-default.png")
+                short_label = label.split(" - ")[-1] if " - " in label else label
+                cards.append((card_key, short_label, icon_name))
+                if len(cards) >= 8:
+                    break
+        except Exception:
+            for item in SHELF_CARDS[2:]:
+                cards.append(item)
+        return cards
 
     def _shelf_card(self, parent: tk.Misc, column: int, card_key: str, label: str,
                     icon_name: str) -> ctk.CTkFrame:
@@ -2446,7 +2550,7 @@ class SortwiseApp(ctk.CTk):
         if icon is not None:
             ctk.CTkLabel(frame, image=icon, text="").grid(row=0, column=0, pady=(12, 2))
         else:
-            ctk.CTkLabel(frame, text="📁", font=self._ui_font(34)).grid(row=0, column=0, pady=(12, 2))
+            ctk.CTkLabel(frame, text="•", font=self._ui_font(34)).grid(row=0, column=0, pady=(12, 2))
 
         ctk.CTkLabel(frame, text=label, font=self._ui_font(self._theme.FONT_TABLE, "bold"),
                      text_color=self._theme.TEXT, wraplength=124, justify="center").grid(
@@ -2518,7 +2622,7 @@ class SortwiseApp(ctk.CTk):
         self._batch_button.grid(row=0, column=3, padx=(0, 8), pady=7, sticky="e")
 
         self._clear_scan_button = ctk.CTkButton(
-            bar, text="✕ Dismiss", width=95, height=36,
+            bar, text="Dismiss", width=95, height=36,
             corner_radius=self._theme.RADIUS_SMALL, fg_color=self._theme.ELEVATED,
             hover_color=self._theme.HOVER, border_width=1, border_color=self._theme.BORDER,
             text_color=self._theme.TEXT_MUTED, font=self._ui_font(self._theme.FONT_BUTTON),
@@ -2626,7 +2730,7 @@ class SortwiseApp(ctk.CTk):
         self._pill_size = self._pill(tags, "—")
         self._pill_pages = self._pill(tags, "—")
         self._btn_dolphin_item = ctk.CTkButton(
-            tags, text="📂 Dolphin", width=100, height=32, corner_radius=6,
+            tags, text="Dolphin", width=100, height=32, corner_radius=6,
             fg_color=self._theme.ACCENT, hover_color=self._theme.ACCENT_DEEP, text_color="#ffffff",
             font=self._ui_font(self._theme.FONT_HINT, "bold"),
             command=self.open_selected_in_dolphin,
@@ -2853,17 +2957,17 @@ class SortwiseApp(ctk.CTk):
         if mode == "card" and key:
             node = self._top_by_card(key)
             label = node.label if node is not None else key
-            crumb_text = f"📁 {target_name} > {label}"
+            crumb_text = f"{target_name} > {label}"
         elif mode == "downloads":
-            crumb_text = f"📥 Intake: {watch_name}  ➔  🎯 Target: {target_name}"
+            crumb_text = f"Intake: {watch_name}  ->  Target: {target_name}"
         elif mode == "subjects":
-            crumb_text = f"📚 Categories in {target_name}"
+            crumb_text = f"Categories in {target_name}"
         elif mode == "review":
-            crumb_text = "⚠️ Review Queue (Ambiguous Matches)"
+            crumb_text = "Review Queue (Ambiguous Matches)"
         elif mode == SCAN_MODE:
-            crumb_text = f"🔍 Scan Results ({watch_name})"
+            crumb_text = f"Scan Results ({watch_name})"
         else:
-            crumb_text = f"📥 Intake: {watch_name}  ➔  🎯 Target: {target_name}"
+            crumb_text = f"Intake: {watch_name}  ->  Target: {target_name}"
         self._crumb_label.configure(text=crumb_text)
 
     def _update_mode_label(self) -> None:
@@ -2984,7 +3088,7 @@ class SortwiseApp(ctk.CTk):
 
             title_lbl = self._section_label(
                 empty_card,
-                f"📂 {folder_name} is empty",
+                f"{folder_name} is empty",
                 font=self._ui_font(self._theme.FONT_TITLE, "bold"),
                 text_color=self._theme.TEXT,
             )
@@ -3006,7 +3110,7 @@ class SortwiseApp(ctk.CTk):
 
             ctk.CTkButton(
                 btn_box,
-                text="📁 Choose Another Folder",
+                text="Choose Another Folder",
                 width=176,
                 height=34,
                 corner_radius=self._theme.RADIUS_SMALL,
@@ -3019,7 +3123,7 @@ class SortwiseApp(ctk.CTk):
 
             ctk.CTkButton(
                 btn_box,
-                text="📄 Pick Document",
+                text="Pick Document",
                 width=140,
                 height=34,
                 corner_radius=self._theme.RADIUS_SMALL,
@@ -3178,7 +3282,7 @@ class SortwiseApp(ctk.CTk):
         if item.is_file:
             return file_icon_name(item.file_type)
         if item.card:
-            for card_key, _label, icon_name in SHELF_CARDS:
+            for card_key, _label, icon_name in self._get_active_shelf_cards():
                 if card_key == item.card:
                     return icon_name
         if item.subject and item.subject in SUBJECT_ICONS:
@@ -3299,7 +3403,7 @@ class SortwiseApp(ctk.CTk):
                 text="Cancel Scan", command=self.cancel_disk_scan,
                 fg_color=self._theme.WARN, hover_color="#dc2626", text_color="#ffffff"
             )
-        self._bulk_summary.configure(text=f"🔍 Scanning {folder_display}...")
+        self._bulk_summary.configure(text=f"Scanning {folder_display}...")
         self._batch_progress.configure(mode="indeterminate")
         try:
             self._batch_progress.start()
@@ -3372,7 +3476,7 @@ class SortwiseApp(ctk.CTk):
         if not self._scan_running:
             return
         folder_name = Path(progress.current).name if progress.current else "folder"
-        msg = f"🔍 Scanning {folder_name}… {progress.documents} docs found ({progress.elapsed:.1f}s)"
+        msg = f"Scanning {folder_name}… {progress.documents} docs found ({progress.elapsed:.1f}s)"
         try:
             self._bulk_summary.configure(text=msg)
             self._set_status(msg, tone="busy")
@@ -3444,7 +3548,7 @@ class SortwiseApp(ctk.CTk):
         total = len(self._scan_results)
         confident = sum(1 for item in self._scan_results if item.status == STATUS_CONFIDENT)
         selected = sum(1 for item in self._scan_results if item.selected)
-        text = f"✓ Found {total} documents · {confident} confident"
+        text = f"Found {total} documents · {confident} confident"
         if selected:
             text += f" ({selected} selected)"
         try:
@@ -3651,7 +3755,7 @@ class SortwiseApp(ctk.CTk):
             return
 
         p = Path(file_path)
-        rating = rate_document(p.name, get_subject_taxonomy())
+        rating = rate_document(p.name, self._service.current_taxonomy(self._config))
         item = DocItem(
             key=f"file:{p.resolve()}",
             label=p.name,
@@ -3863,7 +3967,7 @@ class SortwiseApp(ctk.CTk):
         self._pill_size.configure(text=human_size(item.size))
         self._pill_pages.configure(text=f"{children} file{'s' if children != 1 else ''}")
         if item.subject:
-            entry = get_subject_taxonomy().get(item.subject, {})
+            entry = self._service.current_taxonomy(self._config).get(item.subject, {})
             self._badge_dot.configure(text_color=self._subject_color(item.subject))
             self._badge_label.configure(
                 text=f"{entry.get('code', '')} - {entry.get('name', item.subject)}",
@@ -4064,7 +4168,7 @@ class SortwiseApp(ctk.CTk):
         self._rename_hint.configure(text="Suggested from the extracted title; edit freely before routing.")
         
         # Calculate planned target destination
-        fallback_cat = next(iter(taxonomy.keys()), "CS2227 - AI and ML")
+        fallback_cat = next(iter(taxonomy.keys()), "General")
         target_folder = self._service.destination_folder(item.subject or fallback_cat, config)
         current_stem = self._rename_entry.get().strip() or Path(item.path).stem
         self._target_path_box.configure(text=f"{target_folder} / {current_stem}.{item.file_type or 'pdf'}")
@@ -4234,22 +4338,8 @@ class SortwiseApp(ctk.CTk):
         )
 
     def train_library_models(self) -> None:
-        """Open the interactive RLCD Prototype Training Dialog."""
-        config = self._config_store.load()
-        active = getattr(self, "_active_custom_folder", None)
-        target = config.target_root
-
-        def on_trained() -> None:
-            self._set_status("RLCD Semantic Prototypes updated successfully.", tone="ok")
-            self.load_document_tree()
-
-        TrainingDialog(
-            self,
-            initial_dir=active or target,
-            target_root=target,
-            on_complete=on_trained,
-            theme=self._theme,
-        )
+        """Switch to the in-window Dynamic Training View."""
+        self.switch_view_tab("Training")
 
     def undo_last(self) -> None:
         target = next(
@@ -4294,7 +4384,7 @@ class SortwiseApp(ctk.CTk):
 
     # -- settings ---------------------------------------------------------- #
     def open_settings(self) -> None:
-        SettingsDialog(self, self._config_store.load(), self._apply_settings, theme=self._theme)
+        self.switch_view_tab("Settings")
 
     def _apply_settings(self, changes: dict[str, Any]) -> None:
         config = self._config_store.update(changes)
