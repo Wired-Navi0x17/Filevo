@@ -9,3 +9,7 @@ wheels/
 # Virtual environments
 .venv
 .pytest_cache/
+
+# Rust build artifacts
+target/
+**/target/

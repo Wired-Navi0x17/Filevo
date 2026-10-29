@@ -1,214 +1,218 @@
-# Sortwise
+# Filevo
 
-> **Calibrated Academic Document Router & Visual Storage Manager**  
-> Physical Native Desktop Application (Linux X11/Wayland) · RLCD Calibrated Classification · Filelight Proportion Map · BCUninstaller Multi-Threaded Disk Scanner
+```
+  ███████╗██╗██╗     ███████╗██╗   ██╗ ██████╗
+  ██╔════╝██║██║     ██╔════╝██║   ██║██╔═══██╗
+  █████╗  ██║██║     █████╗  ██║   ██║██║   ██║
+  ██╔══╝  ██║██║     ██╔══╝  ╚██╗ ██╔╝██║   ██║
+  ██║     ██║███████╗███████╗ ╚████╔╝ ╚██████╔╝
+  ╚═╝     ╚═╝╚══════╝╚══════╝  ╚═══╝   ╚═════╝
+```
 
-[![Tests](https://img.shields.io/badge/tests-109%20passed-10b981.svg)](#test-suite)
-[![Python](https://img.shields.io/badge/python-3.11+-3b82f6.svg)](pyproject.toml)
-[![UI](https://img.shields.io/badge/ui-native%20desktop%20(customtkinter)-20242f.svg)](src/native_app.py)
+> **Conversational Document Intelligence & RLCD Generation Engine**  
+> Reinforcement Learning from Calibrated Decisions · Native OpenXML DOCX Synthesis · Persistent Knowledge Base · Zero External C-Dependencies
 
 ---
 
 ## Overview
 
-**Sortwise** is an intelligent, physical desktop application designed to discover, calibrate, classify, rename, and organize university course study materials (`.pdf`, `.docx`, `.pptx`).
+**Filevo** is an interactive, conversational terminal application and document intelligence engine designed to learn structural and stylistic patterns from user-supplied Microsoft Word (`.docx`) files and generate calibrated documents via **Reinforcement Learning from Calibrated Decisions (RLCD)**.
 
-Unlike web or browser-based tools, Sortwise runs as a **100% physical native desktop window** on Linux (Wayland / X11) using **CustomTkinter** and vector-rendered Tk canvas widgets. It features a matte graphite monochrome aesthetic with subtle functional tints, large anti-aliased typography scale ($15\text{pt}$ body, $20\text{--}24\text{pt}$ headers), high-resolution vector icons, an in-flight renamer, and an undo ledger.
-
-### Key Capabilities
-
-* **BCUninstaller-Style Multi-Threaded Disk Scanner**: High-throughput background disk traversal fanning out across worker threads. Intelligently skips system pseudo-filesystems (`/proc`, `/sys`, `/dev`, `/run`, `/nix/store`) and build/dependency caches (`.git`, `node_modules`, `.cache`, `.venv`).
-* **Startup Target Wizard**: Choose at launch between:
-  * **Mode A (Folder Scan)**: Target an intake directory (e.g. `~/Downloads` or course directory).
-  * **Mode B (Deep System Scan)**: Traverses your User Home (`~/`) or Entire OS filesystem (`/`) for orphaned lecture slides, notes, and syllabus documents.
-* **Live Streaming Progress & Cooperative Cancellation**: Real-time progress dialog displaying visited folders, inspected files, discovered documents, elapsed time, and a responsive cancel button.
-* **RLCD Calibrated Decisions**: Dual-perspective classification (lexical tokens + dense SentenceTransformer `all-MiniLM-L6-v2` embeddings), Jensen-Shannon Divergence ($D_{\text{JS}} \le 0.25$), normalized Shannon entropy ($H_{\text{norm}} \le 0.55$), Expected Calibration Error (ECE) telemetry, and human-in-the-loop contextual bandit policy gradient optimization.
-* **Curriculum Taxonomy (Semester 3)**: Tailored keyword profiles and embeddings for core computer science & mathematics subjects, explicitly including **CS2806 - Calculus**.
-* **Filelight-Style Proportion Map**: Pastel-tinted proportion pill bars and folder shelf visualizing disk footprint and distribution.
-* **In-Flight Document Inspector & Renaming**: Inspect recovered metadata, slide/page counts, and generated titles with 1-click routing.
-* **Activity Ledger with Instant Undo**: Every file relocation is recorded in an atomic JSON ledger with 1-click rollback.
+Built entirely on Python standard libraries (`zipfile`, `xml.etree.ElementTree`, `ast`, `math`, `readline`), Filevo requires **zero external C-extension dependencies** and runs reliably across all Linux distributions, including NixOS.
 
 ---
 
-## Semester 3 Taxonomy
+## Key Capabilities
 
-Sortwise includes rich subject profiles and syllabus keywords for Semester 3 university courses:
-
-| Course Code | Subject Label | Syllabus Focus / Keywords |
-| :--- | :--- | :--- |
-| **CS2806** | **CS2806 - Calculus** | Limits, derivatives, integrals, Taylor series, multivariate calculus, gradient vectors, eigenvalues |
-| **CS2227** | **CS2227 - AI and ML** | Supervised learning, classification, neural networks, loss functions, reinforcement learning, RLCD |
-| **CS2000** | **CS2000 - Design and Analysis of Algorithms** | Asymptotic notation, divide-and-conquer, dynamic programming, Dijkstra, greedy algorithms, graph search |
-| **CS2235** | **CS2235 - Data Science** | Pandas, exploratory data analysis, hypothesis testing, regression, data visualization, feature engineering |
-| **CS2405** | **CS2405 - Cyber Security** | Cryptography, RSA, network defense, penetration testing, authentication, malware analysis |
-| **CS2500** | **CS2500 - Cloud Computing and Big Data** | Distributed systems, AWS, Kubernetes, MapReduce, Hadoop, object storage, microservices |
-| **CS2403** | **CS2403 - Computer Networks** | TCP/IP, OSI model, routing protocols, sockets, DNS, congestion control |
-| **CS2404** | **CS2404 - Internet of Things** | Embedded sensors, MQTT, edge computing, microcontrollers, Raspberry Pi |
+* **Conversational Terminal Chat**: Responds naturally to questions and queries, with built-in readline history and tab completion.
+* **Unified Intent Routing**: Natural language requests (`"create a docx on AI"`, `"index my documents"`, `"show status"`) invoke the exact same underlying logic as explicit slash commands (`/create`, `/index`, `/status`).
+* **`@file` Attachment Mentions**: Reference any file in your queries using `@path/to/file` (e.g. `@report.docx what is in this document?`). Filevo extracts the outline, headings, and metrics to ground the conversation.
+* **Persistent Document Knowledge Base**: Incrementally hashes files using SHA-256. Unchanged documents are skipped instantly without reprocessing.
+* **Generalization without Overfitting**: Learns document archetypes, section progressions, heading hierarchies, and typography conventions rather than memorizing literal text.
+* **RLCD Calibrated Decision Model**: Dual-perspective consensus scoring (structural prior vs. learned policy), Jensen-Shannon Divergence ($\text{JSD}$), normalized Shannon entropy ($H_{\text{norm}}$), and calibrated risk gates.
+* **Dedicated OpenXML DOCX Renderer & Validator**: Directly generates styled, professional `.docx` files with custom typography, accent palettes, margins, tables, and callouts, validating the ZIP and XML tree post-generation.
+* **Companion Live Training**: Run live policy training streams side-by-side in a separate terminal window via `report-train 10`.
 
 ---
 
-## RLCD Calibration & Reinforcement Architecture
+## Quickstart
 
+### Launch the Conversational CLI
+Simply type `report` from anywhere in your terminal:
+```bash
+report
 ```
-                       ┌───────────────────────────────┐
-                       │   Extracted Document (.pdf,   │
-                       │     .docx, .pptx, .txt, .md)  │
-                       └──────────────┬────────────────┘
-                                      │
-                 ┌────────────────────┴────────────────────┐
-                 │                                         │
-                 ▼                                         ▼
-  ┌──────────────────────────────┐          ┌──────────────────────────────┐
-  │      Lexical Classifier      │          │     Semantic Bi-Encoder      │
-  │ Sublinear Length-Normalized  │          │   SentenceTransformer MiniLM │
-  │ Keyword & N-Gram Frequencies │          │    Dense Cosine Similarity   │
-  └──────────────┬───────────────┘          └──────────────┬───────────────┘
-                 │                                         │
-                 ▼                                         ▼
-  ┌──────────────────────────────┐          ┌──────────────────────────────┐
-  │  Tempered Softmax (P_lex)    │          │  Tempered Softmax (P_sem)    │
-  │     Scale-Balanced Logits    │          │       Centered Logits        │
-  └──────────────┬───────────────┘          └──────────────┬───────────────┘
-                 │                                         │
-                 └────────────────────┬────────────────────┘
-                                      │
-                                      ▼
-                       ┌───────────────────────────────┐
-                       │  Classifier Disagreement      │
-                       │  Jensen-Shannon Divergence    │
-                       │  D_JS(P_lex || P_sem)         │
-                       │  Agreement = 1.0 - D_JS       │
-                       └──────────────┬────────────────┘
-                                      │
-                                      ▼
-                       ┌───────────────────────────────┐
-                       │   Ensemble Posterior & Gates  │
-                       │   P_ens = 0.5*(P_lex + P_sem) │
-                       │   H_norm = H(P_ens)/log2(K)   │
-                       └──────────────┬────────────────┘
-                                      │
-                     ┌────────────────┴────────────────┐
-                     │                                 │
-                     ▼                                 ▼
-         ┌────────────────────────┐        ┌────────────────────────┐
-         │ Confidence >= 0.70 AND │        │  Confidence < 0.70 OR  │
-         │   Agreement >= 0.75    │        │    Agreement < 0.75    │
-         │   H_norm <= 0.55       │        │     H_norm > 0.55      │
-         └───────────┬────────────┘        └───────────┬────────────┘
-                     │                                 │
-                     ▼                                 ▼
-             [CONFIDENT TIER]                   [REVIEW QUEUE]
-           Auto-route to Subject             Held for User Inspection
-            Archive Directory                       & Override
-                     │                                 │
-                     └────────────────┬────────────────┘
-                                      │
-                                      ▼
-                       ┌───────────────────────────────┐
-                       │ Human-in-the-Loop Feedback:   │
-                       │ Contextual Policy Gradient    │
-                       │   theta <- theta + a*grad*R   │
-                       │ Non-Catastrophic Centroids    │
-                       │ ECE & Brier Score Telemetry   │
-                       └───────────────────────────────┘
+
+### Direct Execution Examples
+```bash
+# Create a validated DOCX via RLCD
+report create "Technical report on Cloud Architecture"
+
+# Index sample DOCX documents into the persistent knowledge base
+report index /path/to/documents
+
+# Inspect system and index status
+report status
+
+# View calibrated policy distribution
+report model
+
+# Record feedback on the last generation
+report feedback +1.0
+
+# Stream live policy training across 10 episodes in a separate window
+report-train 10
 ```
 
 ---
 
-## Installation
+## Command Reference
 
-### Prerequisites
+| Command | Natural Language Equivalent | Description |
+|---|---|---|
+| `/help` | `"help"`, `"what can you do?"` | Displays available commands and usage guide |
+| `/create <topic>` | `"create a docx on <topic>"` | Synthesizes a calibrated DOCX file via RLCD |
+| `/analyze <path>` | `"analyze <path>"`, `"inspect <path>"` | Inspects a document or codebase structure |
+| `/index [path]` | `"index documents in <path>"` | Incrementally indexes DOCX files into the persistent metadata cache |
+| `/train [args]` | `"train model"`, `"train live 10"` | Adapts policy on the indexed corpus or runs live training |
+| `/feedback <score>` | `"feedback +1.0"`, `"rate -0.5"` | Records human feedback on the last generation |
+| `/model` | `"model"`, `"show weights"` | Reports calibrated policy probabilities and typography preferences |
+| `/status` | `"status"`, `"system status"` | Reports indexed document counts and RLCD metrics |
+| `/clear` | `"clear"`, `"cls"` | Clears terminal screen and redraws the Filevo header |
+| `/exit` | `"exit"`, `"quit"`, `"bye"` | Exits the application |
 
-* Linux OS (Wayland or X11)
-* Python 3.11+
-* [`uv`](https://github.com/astral-sh/uv) (recommended fast package manager) or standard `pip`
+---
 
-### Step 1: Clone the Repository
+## Architecture
 
-```bash
-git clone git@github.com:Wired-Navi0x17/Sortwise.git
-cd Sortwise
-```
+```mermaid
+flowchart TD
+    subgraph CLI ["Conversational Terminal CLI ('report')"]
+        UserInput[User Input / Command] --> InputRouter{Input Router}
+        InputRouter -->|Starts with /| SlashHandler[Slash Command Handler]
+        InputRouter -->|Natural Language| IntentClassifier[Intent Classifier]
+        InputRouter -->|Contains @file| FileResolver[@file Attachment Resolver]
+        FileResolver --> ChatContext[Augmented Context]
+        IntentClassifier --> UnifiedExec[Unified Action Dispatcher]
+        SlashHandler --> UnifiedExec
+    end
 
-### Step 2: Install Dependencies
+    subgraph Knowledge ["Persistent Knowledge Base (~/.filevo/knowledge/)"]
+        IndexCmd[/index or NL 'index docs'] --> DocxParser[OpenXML Feature Extractor]
+        DocxParser --> CacheCheck{SHA-256 Changed?}
+        CacheCheck -->|No| Skip[Skip Unchanged File]
+        CacheCheck -->|Yes| FeatureExtractor[Extract Style & Structure]
+        FeatureExtractor --> MetaStore[(Persistent Metadata Store)]
+    end
 
-With `uv`:
-```bash
-uv sync
-```
+    subgraph RLCD ["RLCD Decision Model"]
+        UnifiedExec -->|Create / Analyze Request| RLCDRouter[RLCD Calibrated Decision Router]
+        RLCDRouter --> MetaStore
+        RLCDRouter --> DualPerspective[Dual-Perspective Scoring: Structural + Policy]
+        DualPerspective --> ConfidenceGate{Calibrated Risk Gate}
+        ConfidenceGate -->|Confident| ApplyStrategy[Select Archetype & Formatting]
+        ConfidenceGate -->|Ambiguous| RequestReview[Flag for Review]
+        FeedbackCmd[/feedback] --> PolicyStore[Contextual Policy Gradient Update]
+        PolicyStore --> RLCDRouter
+    end
 
-Or using standard `pip`:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-### Step 3: Install Desktop Integration
-
-Run the bundled desktop installer to generate the application icon, launcher script, and KDE/GNOME application menu entry (`sortwise.desktop`):
-
-```bash
-./install_desktop.sh
+    subgraph Renderer ["Dedicated OpenXML DOCX Renderer"]
+        ApplyStrategy --> ContentSynthesizer[Grounded Content Generator]
+        ContentSynthesizer --> DocxRenderer[OpenXML DOCX Builder]
+        DocxRenderer --> Validator[Zip & XML Validator]
+        Validator --> OutputDocx[(Generated .docx Output)]
+    end
 ```
 
 ---
 
-## Usage
-
-### Launching the Application
-
-You can launch Sortwise directly from your desktop application launcher (search **Sortwise**) or via terminal:
-
-```bash
-# Using installed launcher
-sortwise
-
-# Or via uv
-uv run python src/native_app.py
-```
-
-### Command-Line Options
+## Project Structure
 
 ```
-usage: sortwise [-h] [--config CONFIG] [--ledger LEDGER] [--watch WATCH]
-                [--target TARGET] [--no-scan-wizard] [--version]
-
-options:
-  -h, --help        Show this help message and exit
-  --config CONFIG   Path to config.json (default: ~/.config/sortwise/config.json)
-  --ledger LEDGER   Path to history.json (default: ~/.local/share/sortwise/history.json)
-  --watch WATCH     Override intake watch folder for this session
-  --target TARGET   Override archive root for this session
-  --no-scan-wizard  Bypass the startup scan target dialog
-  --version         Print version and exit
+.
+├── src/
+│   └── doc_gen/
+│       ├── __init__.py           # Package initialization
+│       ├── filevo_cli.py         # Conversational REPL, @file resolver, command router
+│       ├── rlcd_engine.py        # RLCD calibrated decision model & policy store
+│       ├── knowledge_base.py     # Persistent document knowledge & SHA-256 caching
+│       ├── docx_renderer.py      # Dedicated OpenXML DOCX renderer & XML validator
+│       ├── rl_model.py           # REINFORCE policy gradient & Jev primitives
+│       ├── codebase_analyzer.py  # AST parser for codebases, classes, and complexity
+│       ├── document_generator.py # AST-grounded report synthesizer
+│       ├── cli.py                # Backward-compatibility bridge
+│       └── test_filevo.py        # Verification test suite
+├── tests/
+│   └── test_filevo.py            # Automated test suite
+├── AGENTS.md                     # Agent specifications & architecture guidelines
+├── FILEVO_SUMMARY.md             # Per-file technical summary for downstream AI models
+├── pyproject.toml                # Project metadata & launcher entrypoint
+└── README.md                     # This documentation
 ```
 
 ---
 
-## Bulk Crap Uninstaller Disk Scanner
+## Persistent State Layout
 
-Inspired by [Bulk Crap Uninstaller](https://github.com/BCUninstaller/Bulk-Crap-Uninstaller), Sortwise features high-speed filesystem scanning:
-
-1. **Multi-Threaded Worker Queue**: Traverses directory trees with concurrent workers utilizing `os.scandir` without blocking the GUI.
-2. **Virtual Filesystem Exclusion**: Automatically excludes `/proc`, `/sys`, `/dev`, `/run`, `/nix/store`, `/boot`, and `/lost+found`.
-3. **Build & Package Cache Exclusion**: Bypasses `node_modules`, `.git`, `.venv`, `.cargo`, `__pycache__`, and `~/.cache`.
-4. **Cooperative Cancellation**: Instantly halts traversal on user cancellation and displays all discovered items found up to that moment.
-5. **Bulk Action Toolbar**: Select all confident items with one click and batch-route them to target folders while reviewing uncertain items individually.
+All persistent files are saved in `~/.filevo/`:
+* `~/.filevo/knowledge/document_index.json`: Cached document metadata, structural profiles, and SHA-256 hashes.
+* `~/.filevo/policy/rlcd_policy.json`: Calibrated archetype biases, font preferences, baseline returns, and last active decision.
+* `~/.filevo/model.json`: Probabilistic model weights and trajectory state.
+* `~/.filevo/history`: Readline command history for the interactive CLI.
+* `~/.filevo/output/`: Directory where generated `.docx` and `.md` files are stored.
 
 ---
 
-## Test Suite
+## Testing
 
-Sortwise maintains an extensive test suite covering document extraction, taxonomy matching, tempered softmax calibration, entropy gates, undo ledgers, disk scanning, and desktop application components.
-
-Run all tests:
-
+Run the automated verification suite:
 ```bash
-PYTHONPATH=. LD_LIBRARY_PATH="/run/current-system/sw/share/nix-ld/lib:$LD_LIBRARY_PATH" uv run pytest tests/
+python3 tests/test_filevo.py
+```
+Outputs:
+```
+✓ test_no_prd_command passed
+✓ test_docx_renderer_and_validation passed
+✓ test_knowledge_base_incremental_indexing passed
+✓ test_rlcd_decision_engine passed
+✓ test_file_mention_resolver passed
+
+All 5 comprehensive verification tests passed successfully!
 ```
 
-Results:
 ```
-======================== 109 passed in ~36s ========================
+CIE
+├─ .python-version
+├─ AGENTS.md
+├─ FILEVO_SUMMARY.md
+├─ LICENSE
+├─ README.md
+├─ TODO.md
+├─ pyproject.toml
+├─ src
+│  ├─ doc_gen
+│  │  ├─ __init__.py
+│  │  ├─ cli.py
+│  │  ├─ codebase_analyzer.py
+│  │  ├─ conversation_memory.py
+│  │  ├─ dataset_builder.py
+│  │  ├─ document_generator.py
+│  │  ├─ docx_renderer.py
+│  │  ├─ filevo_cli.py
+│  │  ├─ knowledge_base.py
+│  │  ├─ llm_client.py
+│  │  ├─ rich_ui.py
+│  │  ├─ rl_model.py
+│  │  ├─ rlcd_engine.py
+│  │  ├─ test_filevo.py
+│  │  └─ web_researcher.py
+│  └─ filevo_cli_rs
+│     ├─ Cargo.lock
+│     ├─ Cargo.toml
+│     └─ src
+│        └─ main.rs
+├─ tests
+│  └─ test_filevo.py
+└─ uv.lock
+
 ```
