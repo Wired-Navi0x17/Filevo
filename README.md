@@ -1,67 +1,78 @@
 # Filevo
 
 ```
-  ███████╗██╗██╗     ███████╗██╗   ██╗ ██████╗
+  ███████╗██╗██╗     ███████╗██╗   ██╗ ██████╗ 
   ██╔════╝██║██║     ██╔════╝██║   ██║██╔═══██╗
   █████╗  ██║██║     █████╗  ██║   ██║██║   ██║
   ██╔══╝  ██║██║     ██╔══╝  ╚██╗ ██╔╝██║   ██║
   ██║     ██║███████╗███████╗ ╚████╔╝ ╚██████╔╝
-  ╚═╝     ╚═╝╚══════╝╚══════╝  ╚═══╝   ╚═════╝
+  ╚═╝     ╚═╝╚══════╝╚══════╝  ╚═══╝   ╚═════╝ 
 ```
 
 > **Conversational Document Intelligence & RLCD Generation Engine**  
-> Reinforcement Learning from Calibrated Decisions · Native OpenXML DOCX Synthesis · Persistent Knowledge Base · Zero External C-Dependencies
+> Reinforcement Learning from Calibrated Decisions · WordCraft MCP Live Composition · Native OpenXML DOCX Fallback · Anti-Slop Discipline · Zero External C-Dependencies
 
 ---
 
 ## Overview
 
-**Filevo** is an interactive, conversational terminal application and document intelligence engine designed to learn structural and stylistic patterns from user-supplied Microsoft Word (`.docx`) files and generate calibrated documents via **Reinforcement Learning from Calibrated Decisions (RLCD)**.
+**Filevo** is an interactive, conversational terminal application and document intelligence engine. It extracts structural, stylistic, and taxonomic patterns from Microsoft Word (`.docx`) documents to train a policy via **Reinforcement Learning from Calibrated Decisions (RLCD)** and synthesizes calibrated documents.
 
-Built entirely on Python standard libraries (`zipfile`, `xml.etree.ElementTree`, `ast`, `math`, `readline`), Filevo requires **zero external C-extension dependencies** and runs reliably across all Linux distributions, including NixOS.
-
----
-
-## Key Capabilities
-
-* **Conversational Terminal Chat**: Responds naturally to questions and queries, with built-in readline history and tab completion.
-* **Unified Intent Routing**: Natural language requests (`"create a docx on AI"`, `"train policy on my docs"`, `"show status"`) invoke the exact same underlying logic as explicit slash commands (`/create`, `/train`, `/status`).
-* **`@file` Attachment Mentions**: Reference any file in your queries using `@path/to/file` (e.g. `@report.docx what is in this document?`). Filevo extracts the outline, headings, and metrics to ground the conversation.
-* **Persistent Document Knowledge Base**: Incrementally hashes files using SHA-256. Unchanged documents are skipped instantly without reprocessing.
-* **Generalization without Overfitting**: Learns document archetypes, section progressions, heading hierarchies, and typography conventions rather than memorizing literal text.
-* **RLCD Calibrated Decision Model**: Dual-perspective consensus scoring (structural prior vs. learned policy), Jensen-Shannon Divergence ($\text{JSD}$), normalized Shannon entropy ($H_{\text{norm}}$), and calibrated risk gates.
-* **Dedicated OpenXML DOCX Renderer & Validator**: Directly generates styled, professional `.docx` files with custom typography, accent palettes, margins, tables, and callouts, validating the ZIP and XML tree post-generation.
-* **Companion Live Training**: Run live policy training streams side-by-side in a separate terminal window via `report-train 10`.
+### Highlights
+- **WordCraft MCP Integration**: Live, visible desktop composition in ArtCraft WordCraft (`127.0.0.1:7981`) or headless background generation. Documents open automatically in WordCraft upon completion.
+- **Dedicated OpenXML Fallback**: High-performance, zero C-dependency pure-Python DOCX renderer and element validator.
+- **Anti-Slop Discipline**: Strict BLUF (Bottom Line Up Front), Times New Roman typography, substantive multi-paragraph synthesis, and elimination of generic AI cliches.
+- **Calibrated Page Budgeting**: Exact page targeting (e.g. 250 pages = exactly 250 pages) with automatic overflow prevention.
+- **Opt-In PDF Export**: Produces clean `.docx` by default. Companion `.pdf` export occurs strictly when requested via `--pdf`.
+- **Zero C-Dependencies**: Core fallback runs on standard Python libraries (`zipfile`, `xml.etree.ElementTree`, `math`, `readline`) for 100% portability on Linux and NixOS.
 
 ---
 
 ## Quickstart
 
-### Launch the Conversational CLI
-Simply type `report` from anywhere in your terminal:
+### 1. Launch the Interactive CLI
+Launch Filevo directly from anywhere:
 ```bash
 report
 ```
+*(Or invoke directly with `python3 src/doc_gen/filevo_cli.py`)*
 
-### Direct Execution Examples
+### 2. Generate a Document
+Generate reports directly from CLI arguments or interactively in chat:
+
 ```bash
-# Create a validated DOCX via RLCD
-report create "Technical report on Cloud Architecture"
+# Standard report (DOCX only, default Times New Roman)
+report create "Technical Report on Microservices Architecture"
 
-# Index sample DOCX documents into the persistent knowledge base
-report index /path/to/documents
+# Watch live document construction in the WordCraft desktop GUI
+report create --live "Autonomous Robotics Sensor Fusion"
 
-# Inspect system and index status
-report status
+# Generate an exact multi-page monograph (e.g. 250 pages)
+report create "250-page monograph on wild plants"
 
-# View calibrated policy distribution
-report model
+# Opt-in PDF export alongside DOCX
+report create --pdf "Quarterly Financial Analysis"
+```
 
-# Record feedback on the last generation
-report feedback +1.0
+### 3. Ingest Documents & Train Policy
+Filevo uses a unified 3-in-1 pipeline (Ingestion -> Dataset Compilation -> RLCD Policy Gradient Adaptation):
 
-# Stream live policy training across 10 episodes in a separate window
+```bash
+# Train policy on a single document mention
+report train @sample.docx
+
+# Train policy on an entire folder of reference documents
+report train /path/to/reference_documents/
+
+# Stream live policy training episodes in a companion terminal
 report-train 10
+```
+
+### 4. Provide Feedback & Calibrate Policy
+Steer the RLCD policy weights based on generated document quality:
+```bash
+report feedback +1.0   # Reward structural alignment
+report feedback -0.5   # Penalize formatting or outline drift
 ```
 
 ---
@@ -70,58 +81,45 @@ report-train 10
 
 | Command | Natural Language Equivalent | Description |
 |---|---|---|
-| `/help` | `"help"`, `"what can you do?"` | Displays available commands and usage guide |
-| `/create <topic>` | `"create a docx on <topic>"` | Synthesizes a calibrated DOCX file via RLCD |
-| `/analyze <path>` | `"analyze <path>"`, `"inspect <path>"` | Inspects a document or codebase structure |
-| `/train [@file\|dir\|live]` | `"train on @doc.docx"`, `"train live 10"` | Unified 3-in-1 pipeline: ingests documents, compiles supervision datasets & adapts policy gradients |
-| `/feedback <score>` | `"feedback +1.0"`, `"rate -0.5"` | Records human feedback on the last generation |
-| `/model` | `"model"`, `"show weights"` | Reports calibrated policy probabilities and typography preferences |
-| `/status` | `"status"`, `"system status"` | Reports indexed document counts and RLCD metrics |
-| `/clear` | `"clear"`, `"cls"` | Clears terminal screen and redraws the Filevo header |
-| `/exit` | `"exit"`, `"quit"`, `"bye"` | Exits the application |
+| `/create <topic> [--live] [--pdf]` | `"create a docx on <topic>"` | Synthesizes a calibrated document. Add `--live` for GUI mode, `--pdf` for PDF export |
+| `/train [@file\|dir\|live N]` | `"train on @doc.docx"`, `"train live 10"` | Ingests `.docx` files and updates the RLCD policy gradients |
+| `/settings mode [desktop\|headless]` | `"switch mode to desktop"` | Toggles WordCraft visible desktop application or headless server |
+| `/settings engine [wordcraft\|native]` | `"switch engine to native"` | Sets primary composition engine (WordCraft MCP or pure OpenXML) |
+| `/settings auto_open [on\|off]` | `"enable auto open"` | Toggles opening documents in WordCraft upon creation |
+| `/analyze <path>` | `"analyze <path>"`, `"inspect <path>"` | Inspects document structure, outline, or codebase AST |
+| `/feedback <score>` | `"feedback +1.0"`, `"rate -0.5"` | Records human feedback to tune policy weights |
+| `/status` | `"status"`, `"system status"` | Reports indexed document counts, RLCD metrics, and engine status |
+| `/status wordcraft` | `"wordcraft status"` | Displays WordCraft MCP server connection and process state |
+| `/model` | `"model"`, `"show weights"` | Displays RLCD policy probabilities and typography configuration |
+| `/clear` | `"clear"`, `"cls"` | Clears the terminal screen |
+| `/exit` | `"exit"`, `"quit"`, `"bye"` | Exits Filevo |
 
 ---
 
-## Architecture
+## WordCraft MCP Live Composition
 
-```mermaid
-flowchart TD
-    subgraph CLI ["Conversational Terminal CLI ('report')"]
-        UserInput[User Input / Command] --> InputRouter{Input Router}
-        InputRouter -->|Starts with /| SlashHandler[Slash Command Handler]
-        InputRouter -->|Natural Language| IntentClassifier[Intent Classifier]
-        InputRouter -->|Contains @file| FileResolver[@file Attachment Resolver]
-        FileResolver --> ChatContext[Augmented Context]
-        IntentClassifier --> UnifiedExec[Unified Action Dispatcher]
-        SlashHandler --> UnifiedExec
-    end
+Filevo connects to ArtCraft's WordCraft engine via MCP (`wordcraft-cli mcp`):
 
-    subgraph Knowledge ["Persistent Knowledge Base (~/.filevo/knowledge/)"]
-        IndexCmd[/train or NL 'train on docs'] --> DocxParser[OpenXML Feature Extractor]
-        DocxParser --> CacheCheck{SHA-256 Changed?}
-        CacheCheck -->|No| Skip[Skip Unchanged File]
-        CacheCheck -->|Yes| FeatureExtractor[Extract Style & Structure]
-        FeatureExtractor --> MetaStore[(Persistent Metadata Store)]
-    end
+1. **Desktop GUI Mode (`mode = "desktop"`)**:
+   - Automatically connects to or launches WordCraft (`~/.local/bin/wordcraft --control 7981`).
+   - Displays real-time typing, styling, tables, and page-layout operations live on your desktop.
+   - Automatically opens generated `.docx` files in WordCraft when finished.
+2. **Headless Mode (`mode = "headless"`)**:
+   - Executes WordCraft MCP commands silently in the background for batch processing.
+3. **Pure OpenXML Fallback**:
+   - If WordCraft is unavailable or disabled via `/settings engine native`, Filevo falls back to its built-in native OpenXML engine.
 
-    subgraph RLCD ["RLCD Decision Model"]
-        UnifiedExec -->|Create / Analyze Request| RLCDRouter[RLCD Calibrated Decision Router]
-        RLCDRouter --> MetaStore
-        RLCDRouter --> DualPerspective[Dual-Perspective Scoring: Structural + Policy]
-        DualPerspective --> ConfidenceGate{Calibrated Risk Gate}
-        ConfidenceGate -->|Confident| ApplyStrategy[Select Archetype & Formatting]
-        ConfidenceGate -->|Ambiguous| RequestReview[Flag for Review]
-        FeedbackCmd[/feedback] --> PolicyStore[Contextual Policy Gradient Update]
-        PolicyStore --> RLCDRouter
-    end
+---
 
-    subgraph Renderer ["Dedicated OpenXML DOCX Renderer"]
-        ApplyStrategy --> ContentSynthesizer[Grounded Content Generator]
-        ContentSynthesizer --> DocxRenderer[OpenXML DOCX Builder]
-        DocxRenderer --> Validator[Zip & XML Validator]
-        Validator --> OutputDocx[(Generated .docx Output)]
-    end
-```
+## Anti-Slop Document Policy
+
+Every generated document adheres to strict editorial and formatting rules:
+- **BLUF (Bottom Line Up Front)**: First sentence of every section conveys core thesis and direct findings.
+- **Prose-First**: Avoids bullet-point soup; uses substantive paragraphs unless describing strict procedural steps.
+- **No AI Cliches**: Filters out generic tropes (`"Furthermore"`, `"Moreover"`, `"In today's fast-paced world"`, `"Leverage"`, `"Seamless"`).
+- **Substantive Depth**: Guarantees technical depth, hardware specifications, taxonomic classifications, and domain metrics without filler.
+- **Calibrated Page Budgeting**: Automatically calculates target section lengths and suppresses unrequested tables of contents on large volumes to deliver exact requested page counts.
+- **Typography Source of Truth**: Standardized on Times New Roman (Display and Body) with high-contrast monochrome and crisp accent palettes.
 
 ---
 
@@ -130,88 +128,53 @@ flowchart TD
 ```
 .
 ├── src/
-│   └── doc_gen/
-│       ├── __init__.py           # Package initialization
-│       ├── filevo_cli.py         # Conversational REPL, @file resolver, command router
-│       ├── rlcd_engine.py        # RLCD calibrated decision model & policy store
-│       ├── knowledge_base.py     # Persistent document knowledge & SHA-256 caching
-│       ├── docx_renderer.py      # Dedicated OpenXML DOCX renderer & XML validator
-│       ├── rl_model.py           # REINFORCE policy gradient & Jev primitives
-│       ├── codebase_analyzer.py  # AST parser for codebases, classes, and complexity
-│       ├── document_generator.py # AST-grounded report synthesizer
-│       ├── cli.py                # Backward-compatibility bridge
-│       └── test_filevo.py        # Verification test suite
+│   ├── doc_gen/
+│   │   ├── filevo_cli.py         # Terminal REPL, intent router, and @file resolver
+│   │   ├── wordcraft_engine.py   # WordCraft MCP client & live GUI bridge
+│   │   ├── wordcraft_adapter.py  # High-level WordCraft RPC adapter & tool caller
+│   │   ├── antislop_policy.py    # BLUF, typography, and anti-cliche prose filter
+│   │   ├── document_brief.py     # Hierarchical section planning & page budgeting
+│   │   ├── document_ir.py        # Intermediate representation for documents
+│   │   ├── docx_renderer.py      # Native OpenXML builder & package validator
+│   │   ├── rlcd_engine.py        # Dual-perspective RLCD model & risk gates
+│   │   ├── knowledge_base.py     # Native OpenXML reader & SHA-256 caching
+│   │   ├── llm_client.py         # Local model inference & analytical synthesizer
+│   │   ├── model_trainer.py      # Supervision dataset compilation & training
+│   │   ├── rl_model.py           # REINFORCE policy gradients & Jev primitives
+│   │   ├── codebase_analyzer.py  # AST parser for codebases
+│   │   └── rich_ui.py            # Terminal styling, banners, and layout tables
+│   └── filevo_cli_rs/            # High-performance companion Rust TUI
+│       ├── Cargo.toml
+│       └── src/
 ├── tests/
-│   └── test_filevo.py            # Automated test suite
+│   └── test_filevo.py            # Comprehensive 36-test automated verification suite
 ├── AGENTS.md                     # Agent specifications & architecture guidelines
-├── FILEVO_SUMMARY.md             # Per-file technical summary for downstream AI models
-├── pyproject.toml                # Project metadata & launcher entrypoint
-└── README.md                     # This documentation
+├── DOC.md                        # Anti-slop document design source of truth
+└── pyproject.toml                # Project metadata & console scripts
 ```
 
 ---
 
 ## Persistent State Layout
 
-All persistent files are saved in `~/.filevo/`:
-* `~/.filevo/knowledge/document_index.json`: Cached document metadata, structural profiles, and SHA-256 hashes.
-* `~/.filevo/policy/rlcd_policy.json`: Calibrated archetype biases, font preferences, baseline returns, and last active decision.
-* `~/.filevo/model.json`: Probabilistic model weights and trajectory state.
-* `~/.filevo/history`: Readline command history for the interactive CLI.
-* `~/.filevo/output/`: Directory where generated `.docx` and `.md` files are stored.
+Configuration and persistent state are stored in standard user directories:
+- `~/.config/filevo/wordcraft.toml`: WordCraft MCP and Anti-Slop typography settings.
+- `~/.filevo/config.json`: Filevo preferences (active engine, mode, auto-open).
+- `~/.filevo/knowledge/document_index.json`: Cached document outlines, styles, and SHA-256 signatures.
+- `~/.filevo/policy/rlcd_policy.json`: Calibrated archetype biases and REINFORCE weights.
+- `~/.filevo/output/`: Default target directory for generated `.docx` documents.
+- `~/.filevo/history`: Interactive terminal command history.
 
 ---
 
 ## Testing
 
-Run the automated verification suite:
+Run the Python verification test suite (all 36 tests pass):
 ```bash
 python3 tests/test_filevo.py
 ```
-Outputs:
-```
-✓ test_no_prd_command passed
-✓ test_docx_renderer_and_validation passed
-✓ test_knowledge_base_incremental_indexing passed
-✓ test_rlcd_decision_engine passed
-✓ test_file_mention_resolver passed
 
-All 5 comprehensive verification tests passed successfully!
-```
-
-```
-CIE
-├─ .python-version
-├─ AGENTS.md
-├─ FILEVO_SUMMARY.md
-├─ LICENSE
-├─ README.md
-├─ TODO.md
-├─ pyproject.toml
-├─ src
-│  ├─ doc_gen
-│  │  ├─ __init__.py
-│  │  ├─ cli.py
-│  │  ├─ codebase_analyzer.py
-│  │  ├─ conversation_memory.py
-│  │  ├─ dataset_builder.py
-│  │  ├─ document_generator.py
-│  │  ├─ docx_renderer.py
-│  │  ├─ filevo_cli.py
-│  │  ├─ knowledge_base.py
-│  │  ├─ llm_client.py
-│  │  ├─ rich_ui.py
-│  │  ├─ rl_model.py
-│  │  ├─ rlcd_engine.py
-│  │  ├─ test_filevo.py
-│  │  └─ web_researcher.py
-│  └─ filevo_cli_rs
-│     ├─ Cargo.lock
-│     ├─ Cargo.toml
-│     └─ src
-│        └─ main.rs
-├─ tests
-│  └─ test_filevo.py
-└─ uv.lock
-
+Run the companion Rust TUI test suite (all 51 tests pass):
+```bash
+nix-shell -p cargo rustc --run "cargo test --manifest-path src/filevo_cli_rs/Cargo.toml"
 ```
