@@ -21,33 +21,24 @@ use unicode_width::UnicodeWidthStr;
 pub enum NavTab {
     Home,
     Create,
-    Analyze,
-    Train,
-    Model,
+    Documents,
     Settings,
-    Help,
 }
 
 impl NavTab {
-    pub const ALL: [NavTab; 7] = [
+    pub const ALL: [NavTab; 4] = [
         NavTab::Home,
         NavTab::Create,
-        NavTab::Analyze,
-        NavTab::Train,
-        NavTab::Model,
+        NavTab::Documents,
         NavTab::Settings,
-        NavTab::Help,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Home => "HOME",
             Self::Create => "CREATE",
-            Self::Analyze => "ANALYZE",
-            Self::Train => "TRAIN",
-            Self::Model => "MODEL",
+            Self::Documents => "DOCUMENTS",
             Self::Settings => "SETTINGS",
-            Self::Help => "HELP",
         }
     }
 
@@ -725,6 +716,7 @@ pub struct App {
     pub was_online: bool,
     pub last_layout: crate::ui::layout::LayoutRects,
     pub workspace_files: Vec<crate::files::DiscoveredFile>,
+    pub last_click: Option<(Instant, u16, u16)>,
 }
 
 impl App {
@@ -736,6 +728,35 @@ impl App {
         } else {
             (Dashboard::default(), Vec::new(), BackendState::Connecting)
         };
+        let mut dashboard = dashboard;
+        if dashboard.documents.is_empty() {
+            if let Ok(home) = std::env::var("HOME") {
+                let output_dir = std::path::PathBuf::from(home).join(".filevo/output");
+                if let Ok(entries) = std::fs::read_dir(&output_dir) {
+                    let mut docs: Vec<crate::model::DocumentInfo> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("docx"))
+                        .map(|e| {
+                            let metadata = e.metadata().ok();
+                            let size_bytes = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+                            let modified = metadata
+                                .as_ref()
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs() as i64);
+                            crate::model::DocumentInfo {
+                                name: e.file_name().to_string_lossy().to_string(),
+                                path: e.path().to_string_lossy().to_string(),
+                                size_bytes,
+                                modified,
+                            }
+                        })
+                        .collect();
+                    docs.sort_by(|a, b| b.modified.cmp(&a.modified));
+                    dashboard.documents = docs;
+                }
+            }
+        }
         let next_message_id = messages.iter().map(|m| m.id).max().unwrap_or(0) + 1;
         let follow_tail = !demo;
         let workspace_files =
@@ -781,6 +802,7 @@ impl App {
             was_online: false,
             last_layout: crate::ui::layout::LayoutRects::default(),
             workspace_files,
+            last_click: None,
         }
     }
 
@@ -947,6 +969,25 @@ impl App {
         }
     }
 
+    pub fn open_document_path(&mut self, path: &std::path::Path) {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/l41n-pr0t0".to_string());
+        let wc = std::path::PathBuf::from(home).join(".local/bin/wordcraft");
+        let spawned = if wc.exists() {
+            std::process::Command::new(wc).arg(path).spawn()
+        } else {
+            std::process::Command::new("xdg-open").arg(path).spawn()
+        };
+        match spawned {
+            Ok(_) => {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("document");
+                self.toast(format!("Opened in WordCraft: {name}"), ToastKind::Success);
+            }
+            Err(err) => {
+                self.toast(format!("Failed to open document: {err}"), ToastKind::Error);
+            }
+        }
+    }
+
     // ------------------------------------------------------------- mouse
 
     pub fn on_mouse(&mut self, event: crossterm::event::MouseEvent) -> AppAction {
@@ -977,11 +1018,15 @@ impl App {
             return AppAction::None;
         }
 
-        // Documents panel scroll
-        if row >= layout.documents.y
+        // Documents panel / Recent Documents header panel scroll
+        if (row >= layout.documents.y
             && row < layout.documents.y + layout.documents.height
             && col >= layout.documents.x
-            && col < layout.documents.x + layout.documents.width
+            && col < layout.documents.x + layout.documents.width)
+            || (row >= layout.model.y
+                && row < layout.model.y + layout.model.height
+                && col >= layout.model.x
+                && col < layout.model.x + layout.model.width)
         {
             if delta < 0 {
                 self.doc_selected = self.doc_selected.saturating_sub(1);
@@ -1004,6 +1049,15 @@ impl App {
     fn on_mouse_click(&mut self, col: u16, row: u16) -> AppAction {
         let layout = self.last_layout;
 
+        let is_double_click = if let Some((prev_time, prev_col, prev_row)) = self.last_click {
+            prev_time.elapsed() < Duration::from_millis(500)
+                && prev_col.abs_diff(col) <= 2
+                && prev_row.abs_diff(row) <= 1
+        } else {
+            false
+        };
+        self.last_click = Some((Instant::now(), col, row));
+
         // In detail view, clicking top header returns to Home
         if self.view != View::Home && row < 3 {
             self.view = View::Home;
@@ -1022,13 +1076,26 @@ impl App {
             }
         }
 
-        // Model & Session panel click
+        // Recent Documents panel click (in header)
         if row >= layout.model.y
             && row < layout.model.y + layout.model.height
             && col >= layout.model.x
             && col < layout.model.x + layout.model.width
         {
-            return self.activate_nav(NavTab::Model);
+            self.focus = Focus::Documents;
+            let rel_row = row.saturating_sub(layout.model.y + 1) as usize;
+            if rel_row < self.dashboard.documents.len() {
+                self.doc_selected = rel_row;
+                if is_double_click {
+                    if let Some(doc) = self.dashboard.documents.get(rel_row) {
+                        let path = std::path::PathBuf::from(&doc.path);
+                        self.open_document_path(&path);
+                    }
+                } else {
+                    self.attach_selected_document();
+                }
+            }
+            return AppAction::None;
         }
 
         // Input prompt click
@@ -1057,7 +1124,14 @@ impl App {
             let rel_row = row.saturating_sub(layout.documents.y + 1) as usize;
             if rel_row < self.dashboard.documents.len() {
                 self.doc_selected = rel_row;
-                self.attach_selected_document();
+                if is_double_click {
+                    if let Some(doc) = self.dashboard.documents.get(rel_row) {
+                        let path = std::path::PathBuf::from(&doc.path);
+                        self.open_document_path(&path);
+                    }
+                } else {
+                    self.attach_selected_document();
+                }
             }
             return AppAction::None;
         }
@@ -1095,7 +1169,7 @@ impl App {
             return AppAction::RequestDashboard;
         }
         if key.code == KeyCode::F(1) {
-            self.activate_nav(NavTab::Help);
+            self.view = View::Help;
             return AppAction::None;
         }
         if key.code == KeyCode::F(6) {
@@ -1370,6 +1444,15 @@ impl App {
                 AppAction::None
             }
             KeyCode::Enter => {
+                if let Some(doc) = self.dashboard.documents.get(self.doc_selected) {
+                    let path = std::path::PathBuf::from(&doc.path);
+                    self.open_document_path(&path);
+                } else {
+                    self.attach_selected_document();
+                }
+                AppAction::None
+            }
+            KeyCode::Char(' ') => {
                 self.attach_selected_document();
                 AppAction::None
             }
@@ -1384,9 +1467,10 @@ impl App {
 
 
     pub fn cycle_focus(&mut self, forward: bool) {
-        const ORDER: [Focus; 3] = [
+        const ORDER: [Focus; 4] = [
             Focus::Input,
             Focus::Navigation,
+            Focus::Documents,
             Focus::Conversation,
         ];
         let current = ORDER
@@ -1407,59 +1491,28 @@ impl App {
     pub fn activate_nav(&mut self, tab: NavTab) -> AppAction {
         self.active_tab = tab;
         self.nav_selected = tab;
-        self.focus = Focus::Input;
         match tab {
             NavTab::Home => {
                 self.view = View::Home;
+                self.focus = Focus::Input;
                 AppAction::None
             }
             NavTab::Create => {
                 self.view = View::Home;
                 self.input.set_text("/create ");
+                self.focus = Focus::Input;
                 self.toast("Describe the document to create", ToastKind::Info);
                 AppAction::None
             }
-            NavTab::Analyze => {
+            NavTab::Documents => {
                 self.view = View::Home;
-                self.input.set_text("/analyze ");
-                self.toast(
-                    "Enter a document, directory or codebase path",
-                    ToastKind::Info,
-                );
+                self.focus = Focus::Documents;
+                self.toast("Selected recent documents", ToastKind::Info);
                 AppAction::None
-            }
-
-            NavTab::Train => {
-                self.view = View::Home;
-                if self.input.text().trim() == "/train" {
-                    self.submit()
-                } else {
-                    self.input.set_text("/train");
-                    self.toast("Click TRAIN again or press Enter to run", ToastKind::Info);
-                    AppAction::None
-                }
-            }
-            NavTab::Model => {
-                self.view = View::Model;
-                self.detail_scroll = 0;
-                self.detail_error = None;
-                if self.demo {
-                    self.detail_loading = false;
-                    self.toast("Demo model telemetry", ToastKind::Info);
-                    AppAction::None
-                } else {
-                    self.detail_loading = true;
-                    let (task_id, cancel) =
-                        self.begin_task(PendingKind::ModelView, "Reading model telemetry");
-                    AppAction::Send(Request::Python {
-                        task_id,
-                        args: vec!["model".to_string()],
-                        cancel,
-                    })
-                }
             }
             NavTab::Settings => {
                 self.view = View::Settings;
+                self.focus = Focus::Conversation;
                 self.detail_scroll = 0;
                 self.detail_error = None;
                 if self.demo {
@@ -1476,11 +1529,6 @@ impl App {
                         cancel,
                     })
                 }
-            }
-            NavTab::Help => {
-                self.view = View::Help;
-                self.detail_scroll = 0;
-                AppAction::None
             }
         }
     }
@@ -1553,7 +1601,7 @@ impl App {
         match command {
             "/help" => {
                 self.view = View::Help;
-                self.active_tab = NavTab::Help;
+                self.active_tab = NavTab::Home;
                 self.detail_scroll = 0;
                 self.toast(
                     "Help opened · HOME returns to conversation",
@@ -1676,7 +1724,7 @@ impl App {
             ),
             "/model" => {
                 self.view = View::Model;
-                self.active_tab = NavTab::Model;
+                self.active_tab = NavTab::Documents;
                 self.detail_scroll = 0;
                 self.detail_error = None;
                 if self.demo {
@@ -1886,9 +1934,9 @@ impl App {
                 };
                 self.active_tab = match self.view {
                     View::Home => NavTab::Home,
-                    View::Model => NavTab::Model,
+                    View::Model => NavTab::Documents,
                     View::Settings => NavTab::Settings,
-                    View::Help => NavTab::Help,
+                    View::Help => NavTab::Home,
                 };
                 self.toast(
                     if success {
@@ -2341,9 +2389,9 @@ mod tests {
         let mut app = App::new(true);
         app.activate_nav(NavTab::Create);
         assert_eq!(app.input.text(), "/create ");
-        assert_eq!(app.active_tab, NavTab::Create);
-        app.activate_nav(NavTab::Model);
-        assert_eq!(app.view, View::Model);
+        app.activate_nav(NavTab::Documents);
+        assert_eq!(app.focus, Focus::Documents);
+        assert_eq!(app.active_tab, NavTab::Documents);
     }
 
     #[test]

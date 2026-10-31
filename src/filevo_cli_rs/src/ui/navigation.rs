@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "HOME", "CREATE", "ANALYZE", "TRAIN", "MODEL", "SETTINGS", "HELP"
+                "HOME", "CREATE", "DOCUMENTS", "SETTINGS"
             ]
         );
     }

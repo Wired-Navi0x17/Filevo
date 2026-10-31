@@ -70,7 +70,7 @@ fn render_welcome_state(
 ) {
     let show_cat = inner_width >= 40 && viewport_height >= 18;
     let top_pad = if show_cat {
-        (viewport_height.saturating_sub(26) / 3).min(2)
+        (viewport_height.saturating_sub(20) / 3).min(3)
     } else {
         (viewport_height.saturating_sub(12) / 3).min(4)
     };
@@ -80,6 +80,75 @@ fn render_welcome_state(
 
     if show_cat {
         let cat = cat_animation_lines(tick, theme);
+        if inner_width >= 75 {
+            let shortcuts = [
+                ("/create <topic>", "Generate complete DOCX, PDF & visual preview"),
+                ("/create --live <topic>", "Watch live composition in WordCraft desktop"),
+                ("/train @sample.docx", "Adapt RLCD policy and structure from file"),
+                ("/wordcraft status", "Inspect WordCraft MCP server connection & tools"),
+            ];
+
+            for (idx, cat_line) in cat.into_iter().enumerate() {
+                let mut spans = cat_line.spans;
+                match idx {
+                    2 => {
+                        spans.push(Span::raw("    "));
+                        spans.push(Span::styled(
+                            "✦ Filevo Intelligence Online",
+                            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::styled(" · RLCD Policy Active", Style::default().fg(theme.text_dim)));
+                    }
+                    3 => {
+                        spans.push(Span::raw("    "));
+                        spans.push(Span::styled(
+                            "Author professional Word documents via ArtCraft WordCraft with zero AI slop.",
+                            Style::default().fg(theme.text_dim),
+                        ));
+                    }
+                    5 => {
+                        let (cmd, desc) = shortcuts[0];
+                        spans.push(Span::raw("    "));
+                        spans.push(Span::styled(
+                            format!("{:<26}", cmd),
+                            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::styled(desc, Style::default().fg(theme.muted)));
+                    }
+                    6 => {
+                        let (cmd, desc) = shortcuts[1];
+                        spans.push(Span::raw("    "));
+                        spans.push(Span::styled(
+                            format!("{:<26}", cmd),
+                            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::styled(desc, Style::default().fg(theme.muted)));
+                    }
+                    7 => {
+                        let (cmd, desc) = shortcuts[2];
+                        spans.push(Span::raw("    "));
+                        spans.push(Span::styled(
+                            format!("{:<26}", cmd),
+                            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::styled(desc, Style::default().fg(theme.muted)));
+                    }
+                    8 => {
+                        let (cmd, desc) = shortcuts[3];
+                        spans.push(Span::raw("    "));
+                        spans.push(Span::styled(
+                            format!("{:<26}", cmd),
+                            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::styled(desc, Style::default().fg(theme.muted)));
+                    }
+                    _ => {}
+                }
+                lines.push(Line::from(spans));
+            }
+            return;
+        }
+
         lines.extend(cat);
         lines.push(Line::default());
     } else {

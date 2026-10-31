@@ -154,23 +154,9 @@ pub fn compute(area: Rect) -> LayoutRects {
         rects.input = vertical_slice(inner, &mut y, input_height);
         rects.conversation = main;
         let (prompt, rest) = horizontal_split(rects.input, 3, 0);
-        let input_width = ((rest.width.saturating_sub(1) as u32 * 63) / 100) as u16;
-        let input_width = input_width.max(28).min(rest.width.saturating_sub(1));
         rects.prompt = prompt;
-        rects.input = Rect {
-            x: rest.x,
-            y: rest.y,
-            width: input_width,
-            height: rest.height,
-        };
-        if rest.width > input_width + 1 {
-            rects.shortcuts = Rect {
-                x: rest.x + input_width + 1,
-                y: rest.y,
-                width: rest.width - input_width - 1,
-                height: rest.height,
-            };
-        }
+        rects.input = rest;
+        rects.shortcuts = Rect::default();
         return rects;
     }
 
@@ -199,7 +185,7 @@ pub fn compute(area: Rect) -> LayoutRects {
     y = y.saturating_add(1);
     rects.input = vertical_slice(inner, &mut y, input_height);
 
-    let (left_header, right_header) = horizontal_split(rects.header, 74, 1);
+    let (left_header, right_header) = horizontal_split(rects.header, 60, 1);
     rects.header = left_header;
     rects.model = right_header;
 
@@ -211,20 +197,8 @@ pub fn compute(area: Rect) -> LayoutRects {
 
     let (prompt, rest) = horizontal_split(rects.input, 3, 0);
     rects.prompt = prompt;
-    let input_width = ((rest.width.saturating_sub(1) as u32 * 63) / 100) as u16;
-    let input_width = input_width.max(28).min(rest.width.saturating_sub(1));
-    rects.input = Rect {
-        x: rest.x,
-        y: rest.y,
-        width: input_width,
-        height: rest.height,
-    };
-    rects.shortcuts = Rect {
-        x: rest.x + input_width + 1,
-        y: rest.y,
-        width: rest.width.saturating_sub(input_width).saturating_sub(1),
-        height: rest.height,
-    };
+    rects.input = rest;
+    rects.shortcuts = Rect::default();
     rects
 }
 

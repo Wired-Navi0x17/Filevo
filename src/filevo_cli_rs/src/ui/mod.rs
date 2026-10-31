@@ -141,7 +141,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     header::render(frame, rects.header, app.tick, &theme);
     if rects.model.width > 0 {
-        model_session::render(frame, rects.model, app, &theme);
+        documents::render(frame, rects.model, app, &theme);
     }
     navigation::render(frame, rects.nav, app, &theme);
 
@@ -212,21 +212,17 @@ mod tests {
         let mut app = App::new(true);
         let text = screen(&mut app, 180, 60);
         for expected in [
-            "Model",
+            "Recent Documents",
             "HOME",
             "CREATE",
-            "ANALYZE",
-            "TRAIN",
-            "MODEL",
+            "DOCUMENTS",
             "SETTINGS",
-            "HELP",
             "Demo",
             "Type a message",
         ] {
             assert!(text.contains(expected), "missing {expected:?}\n{text}");
         }
         assert!(!text.contains("RLCD Decision"));
-        assert!(!text.contains("Recent Documents"));
         assert!(app.last_viewport > 0);
     }
 
@@ -235,13 +231,12 @@ mod tests {
         let mut app = App::new(true);
         let text = screen(&mut app, 120, 40);
         for expected in [
-            "Model",
-            "C o n v e r s a t i o n a l",
+            "Recent Documents",
+            "Conversational",
         ] {
             assert!(text.contains(expected), "missing {expected:?}\n{text}");
         }
         assert!(!text.contains("RLCD Decision"));
-        assert!(!text.contains("Recent Documents"));
     }
 
     #[test]

@@ -68,9 +68,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if area.width < 4 || area.height < 2 {
         return;
     }
-    let ticker = crate::ui::art::radar_glyph(app.tick);
     let block = theme.panel().title(Line::from(vec![
-        Span::styled(format!(" {} ", ticker), Style::default().fg(theme.primary)),
+        Span::styled(
+            format!(" {} ", theme.glyph("◈", "*")),
+            Style::default().fg(theme.primary),
+        ),
         Span::styled(
             "Model ",
             Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
