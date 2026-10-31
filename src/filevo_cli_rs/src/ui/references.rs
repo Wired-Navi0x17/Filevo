@@ -5,11 +5,11 @@ use crate::app::{App, Focus};
 use crate::model::ReferenceInfo;
 use crate::ui::text::{truncate, wrap};
 use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
+use ratatui::widgets::Paragraph;
 
 fn marker(index: usize, theme: &Theme) -> String {
     if theme.unicode && index < 20 {
@@ -45,17 +45,18 @@ fn push_reference(
         Span::styled(
             number,
             Style::default()
-                .fg(if selected { theme.primary } else { theme.secondary })
+                .fg(if selected {
+                    theme.primary
+                } else {
+                    theme.secondary
+                })
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" ", Style::default()),
         Span::styled(truncate(&reference.title, title_budget), title_style),
     ]));
     lines.push(Line::from(vec![
-        Span::styled(
-            " ".repeat(prefix_width),
-            Style::default(),
-        ),
+        Span::styled(" ".repeat(prefix_width), Style::default()),
         Span::styled(
             truncate(
                 &reference.domain,
@@ -75,16 +76,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     }
     let count = app.dashboard.references.len();
-    let title = format!(
-        "{} References ({count}) ",
-        theme.glyph("◈", "*")
-    );
-    let block = if app.focus == Focus::References {
-        theme.focused_panel()
-    } else {
-        theme.panel()
-    }
-    .title(Span::styled(
+    let title = format!("{} References ({count}) ", theme.glyph("◈", "*"));
+    let block = theme.panel().title(Span::styled(
         title,
         Style::default()
             .fg(theme.primary)
@@ -116,7 +109,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             }
         }
     } else {
-        let visible = ((inner_height + 1) / 3).max(1).min(count);
+        let compact = inner_height < count.saturating_mul(3)
+            && inner_height >= count.saturating_mul(2).max(2);
+        let slot = if compact { 2 } else { 3 };
+        let visible = ((inner_height + slot - 1) / slot).max(1).min(count);
         let selected = app.ref_selected.min(count.saturating_sub(1));
         let start = if selected < visible {
             0
@@ -131,14 +127,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             .skip(start)
             .take(visible)
         {
-            if !lines.is_empty() {
+            if !lines.is_empty() && !compact {
                 lines.push(Line::default());
             }
             push_reference(
                 &mut lines,
                 offset,
                 reference,
-                app.focus == Focus::References && offset == selected,
+                false,
                 inner_width,
                 theme,
             );

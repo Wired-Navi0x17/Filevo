@@ -4,11 +4,11 @@
 use crate::app::App;
 use crate::model::format_size;
 use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
+use ratatui::widgets::Paragraph;
 
 fn gauge(
     ratio: Option<f64>,
@@ -19,8 +19,8 @@ fn gauge(
     let gauge_width = gauge_width.max(1);
     let filled = ratio
         .map(|value| {
-            let count = ((value.clamp(0.0, 1.0) * gauge_width as f64).round() as usize)
-                .min(gauge_width);
+            let count =
+                ((value.clamp(0.0, 1.0) * gauge_width as f64).round() as usize).min(gauge_width);
             if value > 0.0 { count.max(1) } else { count }
         })
         .unwrap_or(0);
@@ -30,10 +30,7 @@ fn gauge(
             Style::default().fg(fill),
         ),
         Span::styled(
-            theme
-                .gauge_empty()
-                .to_string()
-                .repeat(gauge_width - filled),
+            theme.gauge_empty().to_string().repeat(gauge_width - filled),
             Style::default().fg(theme.selection_bg),
         ),
     ]
@@ -48,14 +45,18 @@ fn metric_line(
     fill: ratatui::style::Color,
     theme: &Theme,
 ) -> Line<'static> {
-    let label_budget = column_width.saturating_sub(2 + 1 + value.len()).max(3);
+    let label_budget = column_width
+        .saturating_sub(2 + 1 + crate::ui::text::width(value))
+        .max(3);
     let label = crate::ui::text::truncate(label, label_budget);
-    let used = 2 + crate::ui::text::width(&label) + 1 + value.len();
+    let used = 2 + crate::ui::text::width(&label) + 2 + crate::ui::text::width(value);
     let gauge_width = column_width.saturating_sub(used).clamp(0, 12);
     let mut spans = vec![
         Span::styled(
             format!("{icon} "),
-            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(label.to_string(), Style::default().fg(theme.text_dim)),
     ];
@@ -111,6 +112,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             .telemetry
             .gpu
             .as_ref()
+            .filter(|gpu| gpu.name.contains("RTX"))
             .and_then(|gpu| gpu.name.rsplit("RTX").next())
             .map(|rest| {
                 let number = rest.split_whitespace().next().unwrap_or("").trim();

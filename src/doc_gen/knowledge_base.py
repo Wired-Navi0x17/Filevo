@@ -29,7 +29,7 @@ NAMESPACES = {"w": W_NS}
 @dataclass
 class StyleProfile:
     """Stylistic and typography conventions extracted from a document."""
-    primary_font: str = "Calibri"
+    primary_font: str = "Times New Roman"
     title_size_pt: float = 24.0
     h1_size_pt: float = 18.0
     h2_size_pt: float = 14.0
@@ -99,6 +99,10 @@ class DocumentKnowledgeBase:
                 data = json.load(f)
             self.profiles = {}
             for path_str, record in data.get("profiles", {}).items():
+                if any(ign in path_str for ign in ("Trash", ".Trash", "/tmp/", "/.cache/")):
+                    continue
+                if not os.path.exists(path_str):
+                    continue
                 style_data = record.get("style", {})
                 struct_data = record.get("structure", {})
                 self.profiles[path_str] = DocumentMetadata(
@@ -164,6 +168,9 @@ class DocumentKnowledgeBase:
         else:
             pattern = "**/*.docx" if recursive else "*.docx"
             for p in target_path.glob(pattern):
+                p_str = str(p)
+                if any(ign in p_str for ign in ("Trash", ".Trash", "~$", "/.cache/", "/tmp/")):
+                    continue
                 if not p.name.startswith("~$") and not p.name.startswith("."):
                     docx_files.append(p)
 
@@ -336,7 +343,7 @@ class DocumentKnowledgeBase:
         if not records:
             # Default fallbacks
             return {
-                "font": "Calibri",
+                "font": "Times New Roman",
                 "recommended_sections": [
                     "Introduction",
                     "Methodology",
@@ -350,7 +357,7 @@ class DocumentKnowledgeBase:
 
         # Aggregate most common font
         fonts = [r["font"] for r in records if r.get("font")]
-        most_common_font = max(set(fonts), key=fonts.count) if fonts else "Calibri"
+        most_common_font = max(set(fonts), key=fonts.count) if fonts else "Times New Roman"
 
         # Aggregate recurring section topics across documents
         all_topics: list[str] = []
@@ -372,6 +379,34 @@ class DocumentKnowledgeBase:
             "avg_words_per_para": 50,
             "include_tables": any(r.get("tables_count", 0) > 0 for r in records),
         }
+
+    def find_similar(self, query: str, top_k: int = 1) -> list[dict[str, Any]]:
+        """Find indexed documents semantically similar to query using word overlap and Jaccard similarity."""
+        stop_words = {"a", "an", "the", "on", "for", "in", "of", "report", "document", "docx", "technical", "create", "generate"}
+        q_words = set(re.findall(r"\w+", query.lower())) - stop_words
+        if not q_words or not self.profiles:
+            return []
+
+        scored = []
+        for path_str, meta in self.profiles.items():
+            doc_text = f"{meta.title} {' '.join(meta.structure.section_topics)}".lower()
+            doc_words = set(re.findall(r"\w+", doc_text))
+            intersection = q_words.intersection(doc_words)
+            if not intersection:
+                continue
+            union = q_words.union(doc_words)
+            jaccard = len(intersection) / len(union) if union else 0.0
+            if len(intersection) >= 1:
+                scored.append({
+                    "path": path_str,
+                    "title": meta.title,
+                    "archetype": meta.structure.archetype,
+                    "similarity": round(jaccard, 3),
+                    "matched_words": list(intersection),
+                })
+
+        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        return scored[:top_k]
 
     def get_status_summary(self) -> dict[str, Any]:
         """Return high-level summary of the knowledge base."""

@@ -1,15 +1,15 @@
 //! Detail views for MODEL, STATUS and HELP.  They share one scrollable text
 //! surface so long Python reports remain usable at any terminal size.
 
-use crate::app::{App, BackendState, Focus, View, COMMANDS};
+use crate::app::{App, BackendState, COMMANDS, Focus, View};
 use crate::model::format_epoch_document;
 use crate::ui::text::{pad, truncate, wrap};
 use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
+use ratatui::widgets::Paragraph;
 
 const SPINNER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
@@ -36,13 +36,7 @@ fn heading(lines: &mut Vec<Line<'static>>, title: &str, theme: &Theme) {
     )));
 }
 
-fn field(
-    lines: &mut Vec<Line<'static>>,
-    label: &str,
-    value: &str,
-    theme: &Theme,
-    width: usize,
-) {
+fn field(lines: &mut Vec<Line<'static>>, label: &str, value: &str, theme: &Theme, width: usize) {
     let prefix = format!("  {label}: ");
     let budget = width.saturating_sub(crate::ui::text::width(&prefix)).max(8);
     lines.push(Line::from(vec![
@@ -60,7 +54,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Detail
     }
     let (title, icon) = match app.view {
         View::Model => ("Model Telemetry", theme.glyph("◈", "*")),
-        View::Status => ("System Status", theme.glyph("⚙", "*")),
+        View::Settings => ("Settings & Command Reference (Ctrl+P)", theme.glyph("⚙", "*")),
         View::Help => ("Help & Command Reference", theme.glyph("?", "?")),
         View::Home => ("Conversation", theme.glyph("❯", ">")),
     };
@@ -84,10 +78,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Detail
         };
     }
     let width = inner.width as usize;
-    let mut lines: Vec<Line<'static>> = vec![Line::default()];
+    let mut lines: Vec<Line<'static>> = Vec::new();
     match app.view {
         View::Model => model_view(&mut lines, app, theme, width),
-        View::Status => status_view(&mut lines, app, theme, width),
+        View::Settings => settings_view(&mut lines, app, theme, width),
         View::Help => help_view(&mut lines, app, theme, width),
         View::Home => {}
     }
@@ -274,17 +268,17 @@ fn model_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: u
     }
 }
 
-fn status_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: usize) {
+fn settings_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: usize) {
     if app.demo {
         lines.push(Line::from(Span::styled(
-            "  Demo fixture · these values are not live telemetry",
+            "  Demo fixture · Settings Panel (Ctrl+P)",
             Style::default()
                 .fg(theme.amber)
                 .add_modifier(Modifier::BOLD),
         )));
     }
     if app.detail_loading {
-        lines.push(spinner_line(app, "Reading system status…", theme));
+        lines.push(spinner_line(app, "Reading settings & configuration…", theme));
     }
     if let Some(error) = &app.detail_error {
         lines.push(Line::from(Span::styled(
@@ -292,8 +286,68 @@ fn status_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: 
             Style::default().fg(theme.red),
         )));
     }
+
+    heading(lines, "Available Commands", theme);
+    let usage_width = COMMANDS
+        .iter()
+        .map(|spec| crate::ui::text::width(spec.usage))
+        .max()
+        .unwrap_or(20)
+        .min(28);
+    for spec in COMMANDS {
+        let description_width = crate::ui::text::width(spec.description);
+        if width >= usage_width + description_width + 6 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {}", pad(spec.usage, usage_width)),
+                    Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(spec.description, Style::default().fg(theme.text_dim)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", spec.usage),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in wrap(spec.description, width.saturating_sub(6)) {
+                lines.push(Line::from(Span::styled(
+                    format!("     {line}"),
+                    Style::default().fg(theme.text_dim),
+                )));
+            }
+        }
+    }
+
+    heading(lines, "Keybindings & Shortcuts", theme);
+    let keys = [
+        ("Ctrl+P", "Open this Settings & Command Reference panel"),
+        ("Enter", "Send the message or command"),
+        ("Tab", "Autocomplete slash commands immediately"),
+        ("Ctrl+Y", "Copy last assistant response to clipboard"),
+        ("Ctrl+C", "Cancel running backend task"),
+        ("Ctrl+R", "Refresh live dashboard telemetry"),
+        ("Ctrl+Q", "Exit Filevo immediately"),
+        ("Esc", "Switch focus between prompt and navigation"),
+        ("F1", "Open full Help & Documentation"),
+        ("F6", "Cycle focus across panels"),
+    ];
+    for (key, description) in keys {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<16}", key),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(description, Style::default().fg(theme.text_dim)),
+        ]));
+    }
+
     if let Some(output) = &app.status_output {
-        heading(lines, "Backend report", theme);
+        heading(lines, "Daemon configuration report", theme);
         for line in output.lines() {
             for wrapped in wrap(line, width.saturating_sub(2)) {
                 lines.push(Line::from(Span::styled(
@@ -306,9 +360,9 @@ fn status_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: 
     }
 
     let dashboard = &app.dashboard;
-    heading(lines, "Connection", theme);
+    heading(lines, "Active Configuration & Engine", theme);
     let backend = match &app.backend {
-        BackendState::Demo => "Demo (no backend)".to_string(),
+        BackendState::Demo => "Demo (standalone)".to_string(),
         BackendState::Connecting => "Connecting".to_string(),
         BackendState::Online => "Live daemon".to_string(),
         BackendState::Offline(error) => format!("Offline: {error}"),
@@ -366,10 +420,7 @@ fn status_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: 
             field(
                 lines,
                 "GPU memory",
-                &format!(
-                    "{:.0} / {:.0} MB",
-                    gpu.memory_used_mb, gpu.memory_total_mb
-                ),
+                &format!("{:.0} / {:.0} MB", gpu.memory_used_mb, gpu.memory_total_mb),
                 theme,
                 width,
             );
@@ -466,7 +517,8 @@ fn help_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: us
         .unwrap_or(20)
         .min(28);
     for spec in COMMANDS {
-        if width >= usage_width + 30 {
+        let description_width = crate::ui::text::width(spec.description);
+        if width >= usage_width + description_width + 6 {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("  {}", pad(spec.usage, usage_width)),
@@ -497,8 +549,14 @@ fn help_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: us
     let keys = [
         ("Enter", "Send the message or command"),
         ("Tab", "Complete a slash command; Ctrl+Tab moves focus"),
-        ("Up / Down", "History in the prompt; scroll in focused panels"),
-        ("PgUp / PgDn", "Page through the conversation or detail report"),
+        (
+            "Up / Down",
+            "History in the prompt; scroll in focused panels",
+        ),
+        (
+            "PgUp / PgDn",
+            "Page through the conversation or detail report",
+        ),
         ("Esc", "Move focus between the prompt and navigation"),
         ("F1", "Open this help view"),
         ("F6", "Cycle focus between visible panels"),
@@ -513,18 +571,16 @@ fn help_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: us
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {:<16}", key),
-                Style::default()
-                    .fg(theme.text)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
             Span::styled(description, Style::default().fg(theme.text_dim)),
         ]));
     }
 
-    heading(lines, "Attachments", theme);
+    heading(lines, "Files & Attachments", theme);
     push_wrapped(
         lines,
-        "Mention a generated document with @/absolute/path.docx. Focus Recent Documents (F6) and press Enter to insert an attachment.",
+        "Press Ctrl+O or run /open to launch Dolphin and view all generated documents in ~/.filevo/output. Mention any document with @/absolute/path.docx.",
         Style::default().fg(theme.text_dim),
         width.saturating_sub(2),
     );

@@ -18,15 +18,20 @@ pub mod theme;
 
 use crate::app::{App, ToastKind, View};
 use crate::ui::layout::LayoutMode;
+use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
 
 fn union_visible(rects: &[Rect]) -> Option<Rect> {
     let mut result: Option<Rect> = None;
-    for rect in rects.iter().copied().filter(|rect| rect.width > 0 && rect.height > 0) {
+    for rect in rects
+        .iter()
+        .copied()
+        .filter(|rect| rect.width > 0 && rect.height > 0)
+    {
         result = Some(match result {
             None => rect,
             Some(current) => {
@@ -125,18 +130,16 @@ fn render_toast(frame: &mut Frame, app: &App, theme: &Theme, anchor: Rect) {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let theme = theme::Theme::detect();
     let area = frame.area();
-    frame.render_widget(
-        Block::default().style(Style::default().bg(theme.bg)),
-        area,
-    );
+    frame.render_widget(Block::default().style(Style::default().bg(theme.bg)), area);
     let rects = layout::compute(area);
+    app.last_layout = rects;
     let mode = rects.mode.unwrap_or(LayoutMode::TooSmall);
     if mode == LayoutMode::TooSmall {
         render_too_small(frame, &theme, area.width, area.height);
         return;
     }
 
-    header::render(frame, rects.header, &theme);
+    header::render(frame, rects.header, app.tick, &theme);
     if rects.model.width > 0 {
         model_session::render(frame, rects.model, app, &theme);
     }
@@ -148,9 +151,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         union_visible(&[
             rects.conversation,
             rects.rlcd,
-            rects.references,
             rects.documents,
-            rects.system,
         ])
         .unwrap_or(rects.conversation)
     };
@@ -164,14 +165,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if rects.rlcd.width > 0 {
             rlcd::render(frame, rects.rlcd, app, &theme);
         }
-        if rects.references.width > 0 {
-            references::render(frame, rects.references, app, &theme);
-        }
         if rects.documents.width > 0 {
             documents::render(frame, rects.documents, app, &theme);
-        }
-        if rects.system.width > 0 {
-            system_status::render(frame, rects.system, app, &theme);
         }
         render_toast(frame, app, &theme, rects.conversation);
     }
@@ -190,9 +185,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 mod tests {
     use super::*;
     use crate::app::App;
+    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use ratatui::Terminal;
 
     fn screen(app: &mut App, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
@@ -213,46 +208,40 @@ mod tests {
     }
 
     #[test]
-    fn spacious_demo_renders_every_panel() {
+    fn spacious_demo_renders_clean_conversation_layout() {
         let mut app = App::new(true);
         let text = screen(&mut app, 180, 60);
         for expected in [
             "Model",
-            "Session",
-            "RLCD Decision",
-            "References",
-            "Recent Documents",
-            "System Status",
             "HOME",
             "CREATE",
             "ANALYZE",
-            "INDEX",
             "TRAIN",
             "MODEL",
-            "STATUS",
+            "SETTINGS",
             "HELP",
             "Demo",
             "Type a message",
         ] {
             assert!(text.contains(expected), "missing {expected:?}\n{text}");
         }
+        assert!(!text.contains("RLCD Decision"));
+        assert!(!text.contains("Recent Documents"));
         assert!(app.last_viewport > 0);
     }
 
     #[test]
-    fn standard_layout_keeps_every_panel_visible() {
+    fn standard_layout_keeps_conversation_visible() {
         let mut app = App::new(true);
         let text = screen(&mut app, 120, 40);
         for expected in [
             "Model",
-            "RLCD Decision",
-            "References",
-            "Recent Documents",
-            "System Status",
-            "Conversational",
+            "C o n v e r s a t i o n a l",
         ] {
             assert!(text.contains(expected), "missing {expected:?}\n{text}");
         }
+        assert!(!text.contains("RLCD Decision"));
+        assert!(!text.contains("Recent Documents"));
     }
 
     #[test]
@@ -278,35 +267,28 @@ mod tests {
         let mut app = App::new(false);
         app.dashboard.decision = crate::model::Decision {
             available: false,
-            values: [
-                Some(0.12),
-                Some(0.71),
-                Some(0.08),
-                Some(0.05),
-                Some(0.04),
-            ],
+            values: [Some(0.12), Some(0.71), Some(0.08), Some(0.05), Some(0.04)],
             confidence: Some(0.713),
             entropy: Some(0.58),
             risk: crate::model::Risk::Low,
             source: "backend_default_prior".to_string(),
         };
         let text = screen(&mut app, 180, 60);
-        assert!(text.contains("No live distribution"), "{text}");
-        assert!(text.contains("prior is withheld"), "{text}");
+        assert!(!text.contains("RLCD Decision"));
         assert!(!text.contains("71.3%"));
         assert!(!text.contains("0.71"));
     }
 
     #[test]
     fn all_detail_views_render() {
-        for view in [View::Model, View::Status, View::Help] {
+        for view in [View::Model, View::Settings, View::Help] {
             let mut app = App::new(true);
             app.view = view;
             let text = screen(&mut app, 140, 46);
             assert!(!text.trim().is_empty());
             match view {
                 View::Model => assert!(text.contains("Model Telemetry")),
-                View::Status => assert!(text.contains("System Status")),
+                View::Settings => assert!(text.contains("Settings")),
                 View::Help => assert!(text.contains("Command Reference")),
                 View::Home => {}
             }

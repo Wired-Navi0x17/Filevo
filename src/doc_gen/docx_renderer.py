@@ -5,6 +5,7 @@ using standard library zipfile and xml.etree.ElementTree, with 0 external C-depe
 """
 
 import os
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
@@ -40,7 +41,14 @@ class DocxRenderer:
         if output_filename is None:
             clean_title = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).rstrip()
             clean_title = clean_title.replace(" ", "_")[:35]
-            output_filename = f"{clean_title}.docx"
+            candidate = f"{clean_title}.docx"
+            candidate_path = self.output_dir / candidate
+            counter = 2
+            while candidate_path.exists():
+                candidate = f"{clean_title}_{counter}.docx"
+                candidate_path = self.output_dir / candidate
+                counter += 1
+            output_filename = candidate
 
         out_path = self.output_dir / output_filename
         font = strategy.font_family
@@ -51,7 +59,7 @@ class DocxRenderer:
         root_rels_xml = self._build_root_rels_xml()
         doc_rels_xml = self._build_doc_rels_xml()
         styles_xml = self._build_styles_xml(font, accent)
-        document_xml = self._build_document_xml(title, sections, strategy)
+        document_xml = self._build_document_xml(title, sections, strategy, metadata=metadata)
 
         # Write to Zip archive
         with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
@@ -85,6 +93,64 @@ class DocxRenderer:
                 raise ValueError(f"DOCX validation failed: corrupted document.xml: {e}")
 
         return True
+
+    @staticmethod
+    def extract_document_content(docx_path: Path | str) -> dict[str, Any]:
+        """Extract structured sections and text from an existing OpenXML DOCX file."""
+        docx_path = Path(docx_path)
+        if not docx_path.exists():
+            return {"title": "", "sections": [], "full_text": ""}
+
+        doc_title = docx_path.stem.replace("_", " ")
+        sections: list[dict[str, Any]] = []
+        current_sec: dict[str, Any] | None = None
+        full_paragraphs: list[str] = []
+
+        try:
+            with zipfile.ZipFile(docx_path, "r") as z:
+                if "word/document.xml" not in z.namelist():
+                    return {"title": doc_title, "sections": [], "full_text": ""}
+                doc_xml = z.read("word/document.xml")
+                root = ET.fromstring(doc_xml)
+                ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+
+                for p in root.findall(".//w:p", ns):
+                    p_style = p.find(".//w:pStyle", ns)
+                    style_val = (
+                        p_style.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val", "")
+                        if p_style is not None
+                        else ""
+                    )
+
+                    texts = [t.text for t in p.findall(".//w:t", ns) if t.text]
+                    p_text = "".join(texts).strip()
+                    if not p_text:
+                        continue
+
+                    full_paragraphs.append(p_text)
+
+                    if style_val.lower() == "title":
+                        doc_title = p_text
+                    elif "heading1" in style_val.lower() or "heading 1" in style_val.lower():
+                        if current_sec:
+                            sections.append(current_sec)
+                        current_sec = {"title": p_text, "content": ""}
+                    elif current_sec is not None:
+                        if current_sec["content"]:
+                            current_sec["content"] += "\n\n" + p_text
+                        else:
+                            current_sec["content"] = p_text
+
+                if current_sec:
+                    sections.append(current_sec)
+        except Exception:
+            pass
+
+        return {
+            "title": doc_title,
+            "sections": sections,
+            "full_text": "\n\n".join(full_paragraphs),
+        }
 
     # ------------------------------------------------------------------ #
     # XML Generators
@@ -169,8 +235,9 @@ class DocxRenderer:
 
     @staticmethod
     def _escape_xml(text: str) -> str:
+        clean = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(text))
         return (
-            text.replace("&", "&amp;")
+            clean.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace('"', "&quot;")
@@ -182,6 +249,7 @@ class DocxRenderer:
         title: str,
         sections: list[dict[str, Any]],
         strategy: FormattingStrategy,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         margin_dxa = int(strategy.margin_inches * 1440)  # 1 inch = 1440 dxa
         font = strategy.font_family
@@ -202,8 +270,10 @@ class DocxRenderer:
             </w:r>
         </w:p>""")
 
-        # Callout highlight box if strategy permits
-        if strategy.include_callouts:
+        # Optional semantic executive callout if provided in metadata
+        callout_text = metadata.get("callout") if metadata else None
+        if strategy.include_callouts and callout_text:
+            esc_callout = self._escape_xml(callout_text)
             body_elements.append(f"""
         <w:p>
             <w:pPr>
@@ -219,15 +289,23 @@ class DocxRenderer:
                     <w:i/>
                     <w:color w:val="555555"/>
                 </w:rPr>
-                <w:t>Executive Note: Synthesized with Filevo RLCD Engine. Formatting strategy calibrated to {font} typography and {strategy.margin_inches}&quot; geometry.</w:t>
+                <w:t>{esc_callout}</w:t>
             </w:r>
         </w:p>""")
 
         # Render each section
-        for sec in sections:
+        for s_idx, sec in enumerate(sections):
             sec_title = sec.get("title", "")
             sec_content = sec.get("content", "")
             table_data = sec.get("table", None)
+
+            if s_idx > 0 and (sec.get("page_break") or sec.get("page_break_before") or sec_title.lower().startswith("chapter ")):
+                body_elements.append("""
+        <w:p>
+            <w:r>
+                <w:br w:type="page"/>
+            </w:r>
+        </w:p>""")
 
             if sec_title:
                 esc_sec_title = self._escape_xml(sec_title)
@@ -248,9 +326,12 @@ class DocxRenderer:
                     clean_p = p_text.strip()
                     if not clean_p:
                         continue
-                    if clean_p.startswith("### "):
-                        # Subheading
-                        esc_h2 = self._escape_xml(clean_p[4:])
+                    if clean_p.startswith("### ") or clean_p.startswith("## "):
+                        # Subheading (ensure terminal punctuation like colon)
+                        sub_text = clean_p.lstrip("#").strip()
+                        if not sub_text.endswith((".", "!", "?", ":")):
+                            sub_text += ":"
+                        esc_h2 = self._escape_xml(sub_text)
                         body_elements.append(f"""
         <w:p>
             <w:pPr>
@@ -260,10 +341,52 @@ class DocxRenderer:
                 <w:t>{esc_h2}</w:t>
             </w:r>
         </w:p>""")
+                    elif clean_p.startswith("> "):
+                        # Callout quote
+                        quote_text = clean_p[2:].strip()
+                        if not quote_text.endswith((".", "!", "?", ":")):
+                            quote_text += "."
+                        esc_quote = self._escape_xml(quote_text)
+                        body_elements.append(f"""
+        <w:p>
+            <w:pPr>
+                <w:pBdr>
+                    <w:left w:val="single" w:sz="18" w:space="10" w:color="{accent}"/>
+                </w:pBdr>
+                <w:shd w:val="clear" w:color="auto" w:fill="F4F6F8"/>
+                <w:spacing w:before="100" w:after="160"/>
+                <w:ind w:left="240" w:right="120"/>
+            </w:pPr>
+            <w:r>
+                <w:rPr>
+                    <w:i/>
+                    <w:color w:val="444444"/>
+                </w:rPr>
+                <w:t>{esc_quote}</w:t>
+            </w:r>
+        </w:p>""")
+                    elif any(ln.strip().startswith("|") for ln in clean_p.split("\n")) and "---" in clean_p:
+                        # Markdown table
+                        lines = [ln.strip() for ln in clean_p.split("\n") if ln.strip()]
+                        parsed_rows = []
+                        for ln in lines:
+                            if "---" in ln:
+                                continue
+                            cells = [c.strip() for c in ln.split("|")[1:-1]]
+                            if cells:
+                                parsed_rows.append(cells)
+                        if parsed_rows and strategy.include_tables:
+                            body_elements.append(self._build_table_xml(parsed_rows, accent))
                     elif clean_p.startswith("- ") or clean_p.startswith("* "):
                         # Bullet points
                         for line in clean_p.split("\n"):
                             bullet_text = line.lstrip("-* ").strip()
+                            if not bullet_text:
+                                continue
+                            bullet_text = re.sub(r"\*\*(.*?)\*\*", r"\1", bullet_text)
+                            bullet_text = re.sub(r"\*(.*?)\*", r"\1", bullet_text)
+                            if not bullet_text.endswith((".", "!", "?", ":")):
+                                bullet_text += "."
                             esc_bullet = self._escape_xml(bullet_text)
                             body_elements.append(f"""
         <w:p>
@@ -278,8 +401,54 @@ class DocxRenderer:
                 <w:t>{esc_bullet}</w:t>
             </w:r>
         </w:p>""")
+                    elif re.match(r"^\d+\.\s+", clean_p):
+                        # Numbered procedural steps
+                        for line in clean_p.split("\n"):
+                            line_str = line.strip()
+                            if not line_str:
+                                continue
+                            step_match = re.match(r"^(\d+)\.\s*(.*)$", line_str)
+                            if step_match:
+                                s_num, s_content = step_match.groups()
+                                s_content = re.sub(r"\*\*(.*?)\*\*", r"\1", s_content)
+                                s_content = re.sub(r"\*(.*?)\*", r"\1", s_content)
+                                if not s_content.endswith((".", "!", "?", ":")):
+                                    s_content += "."
+                                esc_s_content = self._escape_xml(s_content)
+                                body_elements.append(f"""
+        <w:p>
+            <w:pPr>
+                <w:ind w:left="400" w:hanging="250"/>
+                <w:spacing w:line="240" w:after="80"/>
+            </w:pPr>
+            <w:r>
+                <w:rPr>
+                    <w:b/>
+                </w:rPr>
+                <w:t>{s_num}. </w:t>
+            </w:r>
+            <w:r>
+                <w:t>{esc_s_content}</w:t>
+            </w:r>
+        </w:p>""")
+                            else:
+                                raw_step = re.sub(r"\*\*(.*?)\*\*", r"\1", line_str)
+                                if not raw_step.endswith((".", "!", "?", ":")):
+                                    raw_step += "."
+                                esc_line = self._escape_xml(raw_step)
+                                if esc_line:
+                                    body_elements.append(f"""
+        <w:p>
+            <w:r>
+                <w:t>{esc_line}</w:t>
+            </w:r>
+        </w:p>""")
                     else:
-                        esc_body = self._escape_xml(clean_p)
+                        clean_body = re.sub(r"\*\*(.*?)\*\*", r"\1", clean_p)
+                        clean_body = re.sub(r"\*(.*?)\*", r"\1", clean_body)
+                        if not clean_body.endswith((".", "!", "?", ":")):
+                            clean_body += "."
+                        esc_body = self._escape_xml(clean_body)
                         body_elements.append(f"""
         <w:p>
             <w:r>

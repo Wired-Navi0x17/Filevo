@@ -124,17 +124,21 @@ pub fn compute(area: Rect) -> LayoutRects {
     }
 
     if mode == LayoutMode::Compact {
-        let margin = if area.width >= 80 && area.height >= 24 { 1 } else { 0 };
+        let margin = if area.width >= 80 && area.height >= 24 {
+            1
+        } else {
+            0
+        };
         let inner = inner_rect(area, margin);
-        let header_height = if inner.height >= 30 {
+        let header_height: u16 = if inner.height >= 30 {
             8
         } else if inner.height >= 22 {
             6
         } else {
             4
         };
-        let nav_height = if inner.height >= 24 { 2 } else { 1 };
-        let gap = if inner.height >= 22 { 1 } else { 0 };
+        let nav_height: u16 = if inner.height >= 24 { 2 } else { 1 };
+        let gap: u16 = if inner.height >= 22 { 1 } else { 0 };
         let input_height = 3;
         let fixed = header_height
             .saturating_add(nav_height)
@@ -172,27 +176,19 @@ pub fn compute(area: Rect) -> LayoutRects {
 
     let margin = 1;
     let inner = inner_rect(area, margin);
-    let header_height = if inner.height >= 54 {
+    let header_height: u16 = if inner.height >= 54 {
         14
     } else if inner.height >= 44 {
         10
     } else {
         8
     };
-    let bottom_height = if inner.height >= 54 {
-        7
-    } else if inner.height >= 44 {
-        6
-    } else {
-        5
-    };
     let nav_height = 2;
     let input_height = 3;
     let fixed = header_height
         .saturating_add(nav_height)
-        .saturating_add(bottom_height)
         .saturating_add(input_height)
-        .saturating_add(3);
+        .saturating_add(2);
     let main_height = inner.height.saturating_sub(fixed).max(1);
 
     let mut y = inner.y;
@@ -201,25 +197,17 @@ pub fn compute(area: Rect) -> LayoutRects {
     y = y.saturating_add(1);
     let main = vertical_slice(inner, &mut y, main_height);
     y = y.saturating_add(1);
-    let bottom = vertical_slice(inner, &mut y, bottom_height);
-    y = y.saturating_add(1);
     rects.input = vertical_slice(inner, &mut y, input_height);
 
     let (left_header, right_header) = horizontal_split(rects.header, 74, 1);
     rects.header = left_header;
     rects.model = right_header;
 
-    let (left_main, right_main) = horizontal_split(main, 72, 1);
-    rects.conversation = left_main;
-    let rlcd_height = 13.min(right_main.height.saturating_sub(6)).max(6);
-    let (rlcd, references) = vertical_split(right_main, rlcd_height, 1);
-    rects.rlcd = rlcd;
-    rects.references = references;
-
-    let (left_bottom, right_bottom) =
-        horizontal_split(bottom, if mode == LayoutMode::Spacious { 58 } else { 56 }, 1);
-    rects.documents = left_bottom;
-    rects.system = right_bottom;
+    rects.conversation = main;
+    rects.rlcd = Rect::default();
+    rects.references = Rect::default();
+    rects.documents = Rect::default();
+    rects.system = Rect::default();
 
     let (prompt, rest) = horizontal_split(rects.input, 3, 0);
     rects.prompt = prompt;

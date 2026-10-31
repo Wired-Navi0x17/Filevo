@@ -33,6 +33,7 @@ class ConversationMemory:
         self.active_document_path: str | None = None
         self.active_document_topic: str | None = None
         self.active_archetype: str | None = None
+        self.last_expanded_section: str | None = None
         self.last_referenced_files: list[str] = []
         self.session_file = Path.home() / ".filevo" / "session_memory.json"
         self.load()
@@ -46,6 +47,7 @@ class ConversationMemory:
                     self.active_document_path = data.get("active_document_path")
                     self.active_document_topic = data.get("active_document_topic")
                     self.active_archetype = data.get("active_archetype")
+                    self.last_expanded_section = data.get("last_expanded_section")
                     self.last_referenced_files = data.get("last_referenced_files", [])
                     raw_turns = data.get("turns", [])
                     self.turns = [
@@ -78,6 +80,7 @@ class ConversationMemory:
                 "active_document_path": self.active_document_path,
                 "active_document_topic": self.active_document_topic,
                 "active_archetype": self.active_archetype,
+                "last_expanded_section": self.last_expanded_section,
                 "last_referenced_files": self.last_referenced_files,
                 "turns": [
                     {
@@ -89,10 +92,16 @@ class ConversationMemory:
                     for t in self.turns[-self.max_turns:]
                 ],
             }
-            with open(self.session_file, "w", encoding="utf-8") as f:
+            tmp_file = self.session_file.with_suffix(".tmp")
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            tmp_file.replace(self.session_file)
         except Exception:
-            pass
+            if "tmp_file" in locals() and tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except Exception:
+                    pass
 
     def add_user_message(self, content: str, attachments: list[dict[str, Any]] | None = None):
         """Record a user turn."""
@@ -111,6 +120,7 @@ class ConversationMemory:
         generated_doc: str | None = None,
         archetype: str | None = None,
         topic: str | None = None,
+        expanded_section: str | None = None,
     ):
         """Record an assistant turn and update active document state."""
         meta = {}
@@ -123,6 +133,9 @@ class ConversationMemory:
         if topic:
             meta["topic"] = topic
             self.active_document_topic = topic
+        if expanded_section:
+            self.last_expanded_section = expanded_section
+            meta["expanded_section"] = expanded_section
 
         self.turns.append(ConversationTurn(role="assistant", content=content, metadata=meta))
         self._prune()
@@ -169,6 +182,7 @@ class ConversationMemory:
         self.active_document_path = None
         self.active_document_topic = None
         self.active_archetype = None
+        self.last_expanded_section = None
         self.last_referenced_files.clear()
         self.save()
 

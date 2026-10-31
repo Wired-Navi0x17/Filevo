@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/filevo-docx",
+    "crates/filevo-inference",
+    "crates/filevo-memory",
+    "crates/filevo-eval",
+    "crates/filevo-policy",
+    "crates/filevo-store",
+    "crates/filevo-core",
+    "src/filevo_cli_rs",
+]
+
+[profile.release]
+opt-level = 2
+lto = "thin"

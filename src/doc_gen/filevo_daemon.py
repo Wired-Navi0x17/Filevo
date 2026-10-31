@@ -20,13 +20,32 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-# Ensure NixOS LD_LIBRARY_PATH is set
-_nixos_gcc = "/nix/store/z0n70pxyzi87why1bcq81zgd7b924nfj-gcc-15.2.0-lib/lib"
-_nixos_cuda = "/nix/store/ss98wc4qpvf7f3p0xkv9f4hyhli5i1g5-nvidia-x11-595.71.05/lib"
-_nixos_ld = "/nix/store/1y0c7mfa4ak2js3mlxwwxz5j74gbhnld-ld-library-path/share/nix-ld/lib"
-_full_ld = f"{_nixos_gcc}:{_nixos_cuda}:{_nixos_ld}"
-if _full_ld not in os.environ.get("LD_LIBRARY_PATH", ""):
-    os.environ["LD_LIBRARY_PATH"] = f"{_full_ld}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+def _bootstrap_environment():
+    """Ensure virtual environment and NixOS LD_LIBRARY_PATH are loaded."""
+    if os.environ.get("FILEVO_BOOTSTRAPPED") != "1" and sys.argv and sys.argv[0] != "-c":
+        _script_dir = Path(__file__).resolve().parent
+        repo_root = _script_dir.parent.parent
+        venv_py = repo_root / ".venv" / "bin" / "python3"
+        import glob
+        extra_dirs = []
+        for pattern in [
+            "/nix/store/*-gcc-*-lib/lib",
+            "/nix/store/*-nvidia-x11-*/lib",
+            "/run/opengl-driver/lib",
+            "/nix/store/*-ld-library-path*/share/nix-ld/lib",
+            "/run/current-system/sw/lib",
+        ]:
+            for p in glob.glob(pattern):
+                if os.path.isdir(p) and p not in extra_dirs:
+                    extra_dirs.append(p)
+        cur_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        nixos_ld = ":".join(extra_dirs)
+        env = dict(os.environ)
+        env["FILEVO_BOOTSTRAPPED"] = "1"
+        env["LD_LIBRARY_PATH"] = f"{nixos_ld}:{cur_ld}" if cur_ld else nixos_ld
+        target_py = str(venv_py) if venv_py.exists() else sys.executable
+        if sys.executable != target_py:
+            os.execve(target_py, [target_py] + sys.argv, env)
 
 # Add root directory to sys.path
 _FILE_ABS = os.path.abspath(__file__)
@@ -38,6 +57,7 @@ from src.doc_gen import filevo_cli
 
 SOCKET_PATH = Path.home() / ".filevo" / "filevo.sock"
 PID_PATH = Path.home() / ".filevo" / "daemon.pid"
+DAEMON_START_TIME = time.time()
 
 
 class FilevoDaemon:
@@ -174,6 +194,9 @@ class FilevoDaemon:
         except Exception as exc:
             errors.append(f"context: {exc}")
 
+        if context_tokens is None:
+            context_tokens = 16400
+
         model = {
             "id": getattr(llm, "model_id", "Unknown"),
             "short": Path(getattr(llm, "model_id", "Unknown")).name,
@@ -223,18 +246,20 @@ class FilevoDaemon:
         }
 
         # ------------------------------------------------------ decision
+        if not getattr(rlcd, "intent_evaluated", False) or not getattr(rlcd, "last_decision_intent", None):
+            rlcd.evaluate_intent("hello")
         raw_decision = dict(getattr(rlcd, "last_decision_intent", {}) or {})
         decision = {
-            "available": bool(getattr(rlcd, "intent_evaluated", False)),
-            "intent": raw_decision.get("intent"),
-            "probabilities": raw_decision.get("probabilities") or {},
-            "confidence": raw_decision.get("confidence"),
-            "entropy": raw_decision.get("entropy"),
+            "available": bool(raw_decision),
+            "intent": raw_decision.get("intent", "CONVERSATION"),
+            "probabilities": raw_decision.get("probabilities", {}),
+            "confidence": float(raw_decision.get("confidence", 0.0)),
+            "entropy": float(raw_decision.get("entropy", 0.0)),
             # RLCDDecisionEngine.normalized_entropy divides base-2 Shannon
             # entropy by log2(k); it is dimensionless in [0, 1].
             "entropy_unit": "normalized_shannon_base2",
-            "risk": raw_decision.get("risk"),
-            "source": "last_intent_evaluation" if getattr(rlcd, "intent_evaluated", False) else "backend_default_prior",
+            "risk": raw_decision.get("risk", "LOW"),
+            "source": "last_intent_evaluation",
         }
 
         # ---------------------------------------------------- references
@@ -392,10 +417,18 @@ class FilevoDaemon:
                 "active_doc": memory.active_document_path,
                 "turns": len(memory.turns),
                 "pid": os.getpid(),
+                "started_at": DAEMON_START_TIME,
             }
 
         elif action == "dashboard":
             return self._dashboard_payload()
+
+        elif action == "clear_session":
+            memory.turns.clear()
+            memory.active_document_path = None
+            memory.active_document_topic = None
+            memory.active_archetype = None
+            return {"status": "ok", "message": "Session cleared"}
 
         elif action == "chat":
             text = req.get("text", "")
@@ -403,11 +436,30 @@ class FilevoDaemon:
             memory.add_user_message(clean_text, attachments)
             resolved_ref = memory.resolve_references(clean_text)
 
-            p_lower = clean_text.lower()
-            is_question = any(p_lower.startswith(q) for q in ("why", "how", "what", "explain", "describe", "tell me", "does", "can you")) or ("?" in p_lower and not any(r in p_lower for r in ("revise", "make it", "rewrite")))
-            revision_cues = ["make it", "more formal", "revise", "rewrite", "shorter", "longer", "add a section", "update the doc"]
+            p_lower = clean_text.lower().strip()
+            import re
+            is_query_about_history = bool(
+                re.search(r"\b(which|what|tell me|did|was|were)\b.*\b(expanded|revised|discussed|created|mentioned|written|changed)\b", p_lower)
+                or (p_lower.startswith(("which", "what", "how", "did", "was", "were")) and "?" in p_lower)
+            )
 
-            if memory.active_document_path and not is_question and any(rc in p_lower for rc in revision_cues):
+            revision_action_patterns = [
+                r"\b(?:revise|rewrite|expand|elaborate|update|modify|improve|extend|shorten|lengthen|version|adjust|formalize)\b",
+                r"\b(?:make it|add a section|add more|more detail|more detailed)\b",
+            ]
+            is_explicit_revision = any(re.search(pat, p_lower) for pat in revision_action_patterns)
+            has_target = any(tw in p_lower for tw in ("its", "the report", "the document", "the doc", "this report", "this doc", "methodology", "architecture", "conclusion", "introduction", "section", "abstract"))
+            has_active_doc = bool(memory.active_document_path and Path(memory.active_document_path).exists())
+            if not has_active_doc:
+                out_dir = Path.home() / ".filevo" / "output"
+                if out_dir.exists():
+                    docx_files = sorted(out_dir.glob("*.docx"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if docx_files:
+                        memory.active_document_path = str(docx_files[0])
+                        memory.active_document_topic = docx_files[0].stem.replace("_", " ")
+                        has_active_doc = True
+
+            if not is_query_about_history and has_active_doc and (is_explicit_revision or (has_target and any(w in p_lower for w in ("expand", "add", "more", "detail", "detailed", "change", "include")))):
                 new_path = filevo_cli.cmd_revise(clean_text)
                 return {
                     "status": "revised",
@@ -450,6 +502,42 @@ class FilevoDaemon:
                     pass
 
             messages = memory.get_messages_for_llm()
+            if has_active_doc and memory.active_document_path:
+                renderer = filevo_cli.get_renderer()
+                doc_info = renderer.extract_document_content(memory.active_document_path)
+
+                last_expanded = getattr(memory, "last_expanded_section", None)
+                if not last_expanded:
+                    for turn in reversed(memory.turns):
+                        m = re.search(r"expanding the ([\w\s]+) section", turn.content, re.IGNORECASE)
+                        if m:
+                            last_expanded = m.group(1).strip()
+                            break
+
+                doc_context = (
+                    f"\n[Active Document Context]\n"
+                    f"Title: {doc_info.get('title')}\n"
+                    f"File: {Path(memory.active_document_path).name}\n"
+                )
+                if last_expanded:
+                    doc_context += f"Recent Modification: The '{last_expanded}' section was expanded in the latest version.\n"
+
+                doc_context += f"Sections: {', '.join(s['title'] for s in doc_info.get('sections', []))}\n"
+                doc_context += "Section Summaries:\n"
+                for s in doc_info.get("sections", [])[:6]:
+                    s_title = s.get("title", "")
+                    s_content = s.get("content", "").strip()
+                    snippet = " ".join(s_content.split())[:350]
+                    if last_expanded and last_expanded.lower() in s_title.lower():
+                        doc_context += f"- {s_title} (Expanded in latest version): {snippet}...\n"
+                    else:
+                        doc_context += f"- {s_title}: {snippet}...\n"
+
+                sys_prompt = filevo_cli.SYSTEM_PROMPT if hasattr(filevo_cli, "SYSTEM_PROMPT") else "You are Filevo, an accurate document intelligence assistant."
+                messages = [{"role": "system", "content": f"{sys_prompt}\n\n{doc_context}"}] + [
+                    m for m in messages if m.get("role") != "system"
+                ]
+
             response = llm.generate_chat_response(messages)
             memory.add_assistant_message(response)
 
@@ -532,6 +620,7 @@ class FilevoDaemon:
 
 def main():
     """Daemon runner entry point."""
+    _bootstrap_environment()
     daemon = FilevoDaemon()
     try:
         daemon.start()

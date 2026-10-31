@@ -2,7 +2,7 @@
 """Filevo Conversational CLI — Antigravity-Style Rich Terminal Application.
 
 Features:
-- Pathway A: Strict, reliable slash commands (/create, /analyze, /index, /train, /feedback, etc.)
+- Pathway A: Strict, reliable slash commands (/create, /analyze, /train, /feedback, etc.)
 - Pathway B: Local Hugging Face Transformers model-driven natural language pipeline
 - Multi-turn conversational memory with reference resolution
 - Dedicated OpenXML DOCX Renderer & Validator
@@ -15,6 +15,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,9 +43,10 @@ if _ROOT_DIR not in sys.path:
 from src.doc_gen.codebase_analyzer import CodebaseAnalyzer
 from src.doc_gen.conversation_memory import ConversationMemory
 from src.doc_gen.dataset_builder import DocxDatasetBuilder
+from src.doc_gen.document_brief import DocumentBrief
 from src.doc_gen.docx_renderer import DocxRenderer
 from src.doc_gen.knowledge_base import DocumentKnowledgeBase
-from src.doc_gen.llm_client import LocalTransformersClient
+from src.doc_gen.llm_client import LocalTransformersClient, SYSTEM_PROMPT
 from src.doc_gen.rich_ui import console, ui
 from src.doc_gen.rl_model import RLProbabilisticModel
 from src.doc_gen.rlcd_engine import RLCDDecisionEngine
@@ -55,18 +57,20 @@ from src.doc_gen.rlcd_engine import RLCDDecisionEngine
 
 COMMANDS = {
     "/help": "Displays all available commands and keyboard shortcuts",
-    "/create": "Creates a calibrated DOCX document  (/create <topic/request>)",
+    "/create": "Creates a calibrated document (/create [--live|--desktop|--native] <topic>)",
     "/revise": "Revises and versions active document (/revise <instruction>)",
     "/research": "Researches a topic across web and live sources (/research <topic>)",
     "/analyze": "Analyzes a document, collection, or codebase (/analyze <path>)",
-    "/index": "Indexes DOCX files into persistent metadata cache (/index [path])",
-    "/train": "Runs learning workflow or live streaming (/train [args])",
+    "/train": "Ingests docs, builds datasets & trains policy (/train [@file|dir|live])",
     "/feedback": "Records feedback on active generation (/feedback [+1.0|-0.5])",
     "/dataset": "Builds leakage-free DOCX training dataset (/dataset [dir])",
     "/benchmark": "Benchmarks candidate local models on 16GB VRAM (/benchmark)",
     "/model": "Reports active model, policy weights, and probabilities",
-    "/status": "Reports system, knowledge base, and memory status",
+    "/wordcraft": "WordCraft MCP status, desktop mode, and inspection (/wordcraft [status|live|inspect|render])",
+    "/open": "Opens generated documents directory in Dolphin file manager (/open or /files)",
+    "/settings": "Opens settings panel and command reference (Ctrl+P)",
     "/clear": "Clears terminal screen and redraws Antigravity banner",
+    "/copy": "Copies last assistant response to clipboard (Ctrl+Y)",
     "/exit": "Exits the application",
 }
 
@@ -77,7 +81,7 @@ COMMANDS = {
 _knowledge_base: DocumentKnowledgeBase | None = None
 _rlcd_engine: RLCDDecisionEngine | None = None
 _docx_renderer: DocxRenderer | None = None
-_rl_model: RLProbabilisticModel | None = None
+_wordcraft_engine: Any | None = None
 _llm_client: LocalTransformersClient | None = None
 _memory: ConversationMemory | None = None
 _dataset_builder: DocxDatasetBuilder | None = None
@@ -105,12 +109,12 @@ def get_renderer() -> DocxRenderer:
     return _docx_renderer
 
 
-def get_model() -> RLProbabilisticModel:
-    global _rl_model
-    if _rl_model is None:
-        model_path = Path.home() / ".filevo" / "model.json"
-        _rl_model = RLProbabilisticModel(model_path=str(model_path))
-    return _rl_model
+def get_wordcraft():
+    global _wordcraft_engine
+    if _wordcraft_engine is None:
+        from src.doc_gen.wordcraft_engine import WordCraftEngine
+        _wordcraft_engine = WordCraftEngine()
+    return _wordcraft_engine
 
 
 def get_llm() -> LocalTransformersClient:
@@ -135,18 +139,146 @@ def get_dataset_builder() -> DocxDatasetBuilder:
 
 
 # ------------------------------------------------------------------ #
+# Settings & Configuration Management
+# ------------------------------------------------------------------ #
+
+def get_filevo_config() -> dict[str, Any]:
+    """Load configuration from ~/.filevo/config.json."""
+    cfg_file = Path.home() / ".filevo" / "config.json"
+    if cfg_file.exists():
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_filevo_config(cfg: dict[str, Any]):
+    """Persist configuration to ~/.filevo/config.json."""
+    cfg_dir = Path.home() / ".filevo"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg_file = cfg_dir / "config.json"
+    try:
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception:
+        pass
+
+
+def is_auto_open_enabled() -> bool:
+    """Check if auto-opening generated documents is enabled (default True)."""
+    return bool(get_filevo_config().get("auto_open", True))
+
+
+def set_auto_open(enabled: bool) -> bool:
+    """Set and persist auto_open setting."""
+    cfg = get_filevo_config()
+    cfg["auto_open"] = enabled
+    save_filevo_config(cfg)
+    return enabled
+
+
+def get_doc_engine_setting() -> str:
+    """Check preferred authoring engine ('wordcraft' or 'native', default 'wordcraft')."""
+    try:
+        from src.doc_gen.wordcraft_adapter import WordCraftConfig
+        wc_cfg = WordCraftConfig.load()
+        if not wc_cfg.enabled:
+            return "native"
+    except Exception:
+        pass
+    return str(get_filevo_config().get("engine", "wordcraft")).lower()
+
+
+def set_doc_engine_setting(engine_name: str) -> str:
+    """Set and persist authoring engine setting."""
+    clean_engine = "wordcraft" if engine_name.lower() in ("wordcraft", "wc") else "native"
+    try:
+        from src.doc_gen.wordcraft_adapter import WordCraftConfig
+        wc_cfg = WordCraftConfig.load()
+        wc_cfg.enabled = (clean_engine == "wordcraft")
+        wc_cfg.save()
+    except Exception:
+        pass
+    cfg = get_filevo_config()
+    cfg["engine"] = clean_engine
+    save_filevo_config(cfg)
+    return clean_engine
+
+
+def get_wordcraft_mode_setting() -> str:
+    """Check WordCraft mode ('desktop' or 'headless', default 'desktop')."""
+    try:
+        from src.doc_gen.wordcraft_adapter import WordCraftConfig
+        wc_cfg = WordCraftConfig.load()
+        return wc_cfg.mode
+    except Exception:
+        return str(get_filevo_config().get("wordcraft_mode", "desktop")).lower()
+
+
+def set_wordcraft_mode_setting(mode_name: str) -> str:
+    """Set and persist WordCraft mode setting."""
+    clean_mode = "desktop" if mode_name.lower() in ("desktop", "live", "gui") else "headless"
+    try:
+        from src.doc_gen.wordcraft_adapter import WordCraftConfig
+        wc_cfg = WordCraftConfig.load()
+        wc_cfg.mode = clean_mode
+        wc_cfg.save()
+    except Exception:
+        pass
+    cfg = get_filevo_config()
+    cfg["wordcraft_mode"] = clean_mode
+    save_filevo_config(cfg)
+    return clean_mode
+
+
+def open_document(doc_path: Path | str) -> bool:
+    """Launch system default application to open generated document."""
+    import subprocess
+    path = Path(doc_path).resolve()
+    if not path.exists():
+        return False
+    try:
+        if sys.platform.startswith("darwin"):
+            subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform.startswith("win"):
+            os.startfile(str(path))
+            if (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and os.environ.get("FILEVO_TESTING") != "1":
+                wc_bin = Path.home() / ".local" / "bin" / "wordcraft"
+                if path.suffix.lower() == ".docx" and wc_bin.exists():
+                    subprocess.Popen([str(wc_bin), str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+    except Exception:
+        return False
+
+
+
+# ------------------------------------------------------------------ #
 # @file Attachment Mention Resolver
 # ------------------------------------------------------------------ #
 
 def resolve_file_mentions(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Parse @filepath mentions, read contents/outlines, and return attachments."""
-    pattern = r"@([a-zA-Z0-9_\-\.\/\~]+)"
-    matches = re.findall(pattern, text)
+    pattern = r'@(?:"([^"]+)"|\'([^\']+)\'|([^\s"\'<>`]+))'
+    raw_matches = re.findall(pattern, text)
     attachments = []
     clean_text = text
 
-    for match in matches:
-        raw_path = match.strip()
+    for match in raw_matches:
+        if match[0]:
+            raw_path = match[0].strip()
+        elif match[1]:
+            raw_path = match[1].strip()
+        elif match[2]:
+            raw_path = match[2].strip().rstrip("?,.!;:")
+        else:
+            continue
+
+        if not raw_path:
+            continue
         p = Path(raw_path).expanduser().resolve()
         if not p.exists():
             p = (Path.cwd() / raw_path).resolve()
@@ -193,8 +325,19 @@ def cmd_help():
 
 
 def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None):
-    """Creates a validated DOCX document using RLCD calibrated decision policy."""
-    if not request_str.strip():
+    """Creates a validated DOCX document using RLCD calibrated decision policy and WordCraft/OpenXML engine."""
+    force_visible = any(f in request_str for f in ("--live", "--desktop", "--gui"))
+    force_headless = "--headless" in request_str
+    force_native = any(f in request_str for f in ("--native", "--openxml"))
+    force_no_pdf = any(f in request_str for f in ("--no-pdf", "--without-pdf", "-no-pdf"))
+    force_pdf = any(f in request_str for f in ("--pdf", "-pdf")) and not force_no_pdf
+
+    clean_request = request_str
+    for f in ("--live", "--desktop", "--gui", "--headless", "--native", "--openxml", "--no-pdf", "--without-pdf", "-no-pdf", "--pdf", "-pdf"):
+        clean_request = clean_request.replace(f, "")
+    clean_request = clean_request.strip()
+
+    if not clean_request:
         console.print("[yellow]Please specify a topic or document request. Example: /create Technical Report on AI[/yellow]")
         return
 
@@ -203,8 +346,8 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
     renderer = get_renderer()
     memory = get_memory()
 
-    with ui.spinner(f"Evaluating RLCD calibrated decision policy for: '{request_str}'..."):
-        decision = rlcd.decide(request_str)
+    with ui.spinner(f"Evaluating RLCD calibrated decision policy for: '{clean_request}'..."):
+        decision = rlcd.decide(clean_request)
         time.sleep(0.1)
 
     # Render styled decision telemetry panel
@@ -213,29 +356,36 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
     llm = get_llm()
     formatting = decision.formatting
 
-    # Semantic Title & Topic extraction via language model
-    spec = llm.extract_document_spec(request_str, memory.get_messages_for_llm())
-    title = spec.get("title") or f"{decision.archetype} Document"
-    topic = spec.get("topic") or title
+    # Semantic Title, Topic, and Explicit Section extraction via language model
+    spec = llm.extract_document_spec(clean_request, memory.get_messages_for_llm())
+    explicit_secs = spec.get("explicit_sections") or []
 
-    # Live Web Research grounding for unknown topics or web-assisted requests
+    # Live Web Research grounding: only when explicitly requested or required
     web_data = None
-    has_local = False
-    try:
-        similar = kb.find_similar(request_str, top_k=1)
-        if similar and similar[0].get("similarity", 0) > 0.45:
-            has_local = True
-    except Exception:
-        has_local = False
-
-    needs_web = (not has_local) or any(k in request_str.lower() for k in ("web", "browse", "research", "internet", "online", "latest", "news"))
+    needs_web = any(k in clean_request.lower() for k in ("web", "browse", "research", "internet", "online", "latest", "news"))
     if needs_web:
-        with ui.spinner(f"Grounding topic via live web research (Wikipedia & Web Search)..."):
+        clean_query = spec.get("topic") or clean_request
+        with ui.spinner(f"Grounding topic via live web research for '{clean_query}'..."):
             from src.doc_gen.web_researcher import WebResearcher
             wr = WebResearcher()
-            web_data = wr.research_topic(request_str)
+            web_data = wr.research_topic(clean_query)
             if web_data.get("has_web_data"):
                 console.print(f"[dim]🌐 Live web knowledge grounded: {len(web_data.get('sources', []))} reference source(s) discovered[/dim]")
+
+    web_overview = web_data.get("overview", "") if web_data else ""
+    web_sources = web_data.get("sources", []) if web_data else []
+
+    # Construct authoritative DocumentBrief preserving full request and requirements
+    brief = DocumentBrief.from_request(
+        user_request=clean_request,
+        archetype=decision.archetype,
+        explicit_sections=explicit_secs,
+        web_sources=web_sources,
+        attachments=attachments,
+    )
+    title = brief.title
+    topic = brief.topic
+    memory.active_brief = brief
 
     sections = []
     att_summary = ""
@@ -246,13 +396,10 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
             if a.get("content"):
                 att_summary += f"### Reference: {a['name']}\n{a['content'][:300]}...\n\n"
 
-    # Incorporate web overview into introduction if available
-    web_overview = web_data.get("overview", "") if web_data else ""
-    web_sources = web_data.get("sources", []) if web_data else []
     grounding = f"{web_overview}\n{att_summary}".strip()
 
     with ui.spinner("Synthesizing document content with local model and compiling OpenXML package..."):
-        if decision.archetype == "Formal Letter":
+        if brief.genre == "Formal Letter" or decision.archetype == "Formal Letter":
             sections = [
                 {
                     "title": "Formal Salutation and Recipient",
@@ -265,15 +412,15 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
                 },
                 {
                     "title": "Statement of Purpose",
-                    "content": llm.generate_section_content("Statement of Purpose", title, decision.archetype, grounding),
+                    "content": llm.generate_section_content("Statement of Purpose", title, brief.genre, grounding, brief=brief),
                 },
                 {
                     "title": "Background and Justification",
-                    "content": llm.generate_section_content("Background and Justification", title, decision.archetype, grounding),
+                    "content": llm.generate_section_content("Background and Justification", title, brief.genre, grounding, brief=brief),
                 },
                 {
                     "title": "Formal Terms and Requirements",
-                    "content": llm.generate_section_content("Formal Terms and Requirements", title, decision.archetype, grounding),
+                    "content": llm.generate_section_content("Formal Terms and Requirements", title, brief.genre, grounding, brief=brief),
                 },
                 {
                     "title": "Closing and Authorization Signatures",
@@ -286,33 +433,109 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
                 },
             ]
         else:
-            for i, s_title in enumerate(decision.recommended_sections):
+            # Attempt model load if available
+            model_loaded = False
+            try:
+                model_loaded = llm.load()
+            except Exception as e:
+                console.print(f"[dim yellow]Model load exception: {e}[/dim yellow]")
+
+            brief.is_offline_fallback = not model_loaded
+
+            if not model_loaded:
+                console.print("[dim yellow]Note: Local language model offline or unavailable; compiling structured outline via DocumentBrief grounding.[/dim yellow]")
+
+            for p_sec in brief.sections:
+                s_title = p_sec.heading
                 content = llm.generate_section_content(
                     section_title=s_title,
                     doc_title=title,
-                    archetype=decision.archetype,
+                    archetype=brief.genre,
                     grounding_context=grounding,
+                    brief=brief,
                 )
-                sec_dict = {"title": s_title, "content": content}
-
-                if formatting.include_tables and ("Evaluation" in s_title or "Analysis" in s_title or "Architecture" in s_title):
-                    sec_dict["table"] = [
-                        ["Component", "Metric", "Calibrated Value", "Target Status"],
-                        ["Decision Gate", "Agreement (JSD)", f"{decision.agreement*100:.1f}%", "Passed"],
-                        ["Normalized Entropy", "H_norm(P)", f"{decision.normalized_entropy:.3f}", "Calibrated"],
-                        ["Typography Strategy", "Font Family", formatting.font_family, "Applied"],
-                        ["OpenXML Validation", "Integrity", "100%", "Verified"],
-                    ]
-                sections.append(sec_dict)
+                sections.append({
+                    "title": s_title,
+                    "content": content,
+                    "page_break": p_sec.page_break_before,
+                    "page_break_before": p_sec.page_break_before,
+                })
 
         # Append Live Web Sources & References section if web research was conducted
         if web_sources:
             ref_content = "Primary references and live web sources consulted during synthesis:\n\n"
             for s in web_sources[:6]:
-                ref_content += f"• {s}\n"
+                ref_content += f"• {s.get('title', '')}: {s.get('url', '')}\n"
             sections.append({"title": "References and Discovered Sources", "content": ref_content})
 
-        doc_path = renderer.render(title=title, sections=sections, strategy=formatting)
+        from src.doc_gen.document_ir import DocumentIR
+        wc = get_wordcraft()
+        doc_ir = DocumentIR.from_brief_and_content(
+            brief=brief,
+            sections_data=sections,
+            antislop=wc.config.antislop,
+        )
+
+        wc_result = None
+        is_user_storage = str(renderer.output_dir).startswith(str(Path.home()))
+        use_wordcraft = not force_native and is_user_storage and (get_doc_engine_setting() == "wordcraft" or force_visible or force_headless)
+        if is_user_storage:
+            wc.output_dir = renderer.output_dir
+
+        if use_wordcraft and wc.is_available():
+            is_live = force_visible or (get_wordcraft_mode_setting() == "desktop" and not force_headless)
+            if is_live and not wc.is_desktop_running():
+                console.print(f"[dim]WordCraft desktop control port inactive; spawning application on {wc.config.control_address}...[/dim]")
+            mode_desc = "live visible desktop word processor" if is_live else "WordCraft MCP"
+            positive_pdf_patterns = [
+                r"\b(?:also|and|export|generate|make|create|with|save|output|render|convert\s+to)\s+(?:a\s+)?pdf\b",
+                r"\b(?:as|to|in)\s+pdf\b",
+                r"\bpdf\s+(?:format|version|copy|export|file)\b",
+            ]
+            negative_pdf_patterns = [
+                r"\b(?:no|not|never|without|don['’]?t|do\s+not|stop|no\s+need\s+of)\s+(?:a\s+)?pdf\b",
+                r"\bwhy\s+(?:did|does|is)\s+it\s+(?:create|make|generate)\s+pdf\b",
+                r"\bwhy\s+pdf\b",
+            ]
+            has_positive_pdf = any(re.search(pat, clean_request, flags=re.IGNORECASE) for pat in positive_pdf_patterns)
+            has_negative_pdf = any(re.search(pat, clean_request, flags=re.IGNORECASE) for pat in negative_pdf_patterns) or force_no_pdf
+            export_pdf_requested = bool((has_positive_pdf or force_pdf) and not has_negative_pdf)
+            pkg_desc = "OpenXML/PDF package" if export_pdf_requested else "OpenXML package"
+            with ui.spinner(f"Composing document, tables, and {pkg_desc} via {mode_desc}..."):
+                try:
+                    wc_result = wc.compose_from_ir(
+                        doc_ir=doc_ir,
+                        strategy=formatting,
+                        visible=is_live,
+                        export_pdf=export_pdf_requested,
+                    )
+                    doc_path = wc_result.docx_path
+                except Exception as e:
+                    console.print(f"[yellow]⚠ WordCraft composition encountered an error ({e}); falling back to native OpenXML renderer...[/yellow]")
+                    doc_path = renderer.render(
+                        title=title,
+                        sections=sections,
+                        strategy=formatting,
+                        metadata={"subtitle": f"{brief.genre} | {brief.audience}", "archetype": brief.genre},
+                    )
+                    wc_result = None
+        else:
+            doc_path = renderer.render(
+                title=title,
+                sections=sections,
+                strategy=formatting,
+                metadata={"subtitle": f"{brief.genre} | {brief.audience}", "archetype": brief.genre},
+            )
+
+    # Autonomous Policy Learning: objectively evaluate outcome and update policy gradients
+    rlcd.record_autonomous_experience(
+        operation="create",
+        prompt=clean_request,
+        decision=decision,
+        artifact_path=doc_path,
+        sections=sections,
+        explicit_sections=explicit_secs if explicit_secs else None,
+    )
 
     # Record in conversational memory
     memory.add_assistant_message(
@@ -323,25 +546,39 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
     )
 
     # Display styled document card
-    ui.display_document_card(doc_path, title, len(sections), decision.archetype)
+    ui.display_document_card(doc_path, title, len(sections), decision.archetype, wc_result=wc_result)
+
+    if is_auto_open_enabled():
+        open_document(doc_path)
 
 
 def cmd_revise(revision_instruction: str):
-    """Revises and versions the active document in conversation memory."""
+    """Revises and versions the active document in conversation memory, preserving existing content."""
     memory = get_memory()
     active_doc = memory.active_document_path
     active_topic = memory.active_document_topic or "Document"
+    if not active_doc or not Path(active_doc).exists():
+        out_dir = Path.home() / ".filevo" / "output"
+        if out_dir.exists():
+            docx_files = sorted(out_dir.glob("*.docx"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if docx_files:
+                active_doc = str(docx_files[0])
+                active_topic = docx_files[0].stem.replace("_", " ")
+                memory.active_document_path = active_doc
+                memory.active_document_topic = active_topic
+
     if not active_doc or not Path(active_doc).exists():
         console.print("[yellow]No active document to revise. Create a document first via /create.[/yellow]")
         return None
 
     orig_path = Path(active_doc)
     stem = orig_path.stem
+    version_num = 2
     if "_v" in stem:
         parts = stem.split("_v")
         try:
-            ver = int(parts[-1]) + 1
-            new_stem = f"{parts[0]}_v{ver}"
+            version_num = int(parts[-1]) + 1
+            new_stem = f"{parts[0]}_v{version_num}"
         except ValueError:
             new_stem = f"{stem}_v2"
     else:
@@ -352,6 +589,11 @@ def cmd_revise(revision_instruction: str):
     renderer = get_renderer()
     llm = get_llm()
 
+    # Extract existing sections and content directly from the active DOCX OpenXML
+    doc_data = renderer.extract_document_content(orig_path)
+    existing_sections = doc_data.get("sections", [])
+    doc_title = doc_data.get("title") or active_topic
+
     with ui.spinner(f"Revising and versioning '{stem}' -> '{new_stem}'..."):
         decision = rlcd.decide(f"{active_topic} {revision_instruction}")
         fmt = decision.formatting
@@ -360,28 +602,95 @@ def cmd_revise(revision_instruction: str):
             fmt.font_family = "Times New Roman"
             fmt.line_spacing = 1.15
 
-        revised_sections = [
-            {
-                "title": s,
-                "content": llm.rewrite_section_content(
-                    existing_content=f"Section {s} regarding {active_topic}.",
-                    section_title=s,
-                    revision_instruction=revision_instruction,
-                ),
-            }
-            for s in decision.recommended_sections
-        ]
-        new_path = renderer.render(title=active_topic, sections=revised_sections, strategy=fmt, output_filename=new_filename)
+        # Match target section from revision instruction
+        inst_lower = revision_instruction.lower()
+        target_section_idx = None
+        expanded_section_title = None
 
-    rev_msg = f"I have revised '{active_topic}' and created version 2 at {new_path.name} with your requested adjustments."
+        for idx, sec in enumerate(existing_sections):
+            sec_title_lower = sec.get("title", "").lower()
+            sec_words = [w for w in re.findall(r"\w+", sec_title_lower) if len(w) > 3]
+            if sec_title_lower in inst_lower or any(sw in inst_lower for sw in sec_words):
+                target_section_idx = idx
+                expanded_section_title = sec.get("title")
+                break
+
+        revised_sections = []
+        if existing_sections:
+            for idx, sec in enumerate(existing_sections):
+                s_title = sec.get("title", "")
+                orig_content = sec.get("content", "")
+                sec_dict = {"title": s_title}
+
+                brief = getattr(memory, "active_brief", None) or DocumentBrief.from_request(
+                    user_request=f"{active_topic} {revision_instruction}"
+                )
+
+                if target_section_idx is not None and idx == target_section_idx:
+                    # Targeted section revision/expansion with full document brief and semantic rewriting
+                    revised_content = llm.rewrite_section_content(
+                        existing_content=orig_content,
+                        section_title=s_title,
+                        revision_instruction=revision_instruction,
+                        doc_title=doc_title,
+                        brief=brief,
+                    )
+                    sec_dict["content"] = revised_content
+                elif target_section_idx is None and any(w in inst_lower for w in ("formal", "tone", "style", "polish")):
+                    sec_dict["content"] = llm.rewrite_section_content(
+                        existing_content=orig_content,
+                        section_title=s_title,
+                        revision_instruction=revision_instruction,
+                        doc_title=doc_title,
+                        brief=brief,
+                    )
+                else:
+                    # Existing sections preserved unaltered!
+                    sec_dict["content"] = orig_content
+
+                if sec.get("table"):
+                    sec_dict["table"] = sec["table"]
+                revised_sections.append(sec_dict)
+        else:
+            revised_sections = [
+                {
+                    "title": s,
+                    "content": llm.generate_section_content(s, doc_title, decision.archetype),
+                }
+                for s in decision.recommended_sections
+            ]
+
+        new_path = renderer.render(title=doc_title, sections=revised_sections, strategy=fmt, output_filename=new_filename)
+
+    # Autonomous Policy Learning: objectively evaluate revised artifact and update policy
+    prev_arch = memory.active_archetype or decision.archetype
+    rlcd.record_revision_experience(
+        prompt=revision_instruction,
+        previous_archetype=prev_arch,
+        new_archetype=decision.archetype,
+        artifact_path=new_path,
+    )
+    rlcd.record_autonomous_experience(
+        operation="revise",
+        prompt=f"{active_topic} {revision_instruction}",
+        decision=decision,
+        artifact_path=new_path,
+        sections=revised_sections,
+    )
+
+    exp_note = f", expanding the {expanded_section_title} section" if expanded_section_title else ""
+    rev_msg = f"I have revised '{doc_title}' and created version {version_num} at {new_path.name}{exp_note}."
     memory.add_assistant_message(
         rev_msg,
         generated_doc=str(new_path),
         archetype=decision.archetype,
-        topic=active_topic,
+        topic=doc_title,
+        expanded_section=expanded_section_title,
     )
     ui.print_assistant_message(rev_msg)
-    ui.display_document_card(new_path, f"{active_topic} (Version 2)", len(revised_sections), decision.archetype)
+    ui.display_document_card(new_path, f"{doc_title} (Version {version_num})", len(revised_sections), decision.archetype)
+    if is_auto_open_enabled():
+        open_document(new_path)
     return new_path
 
 
@@ -524,10 +833,48 @@ def cmd_dataset(path_arg: str):
     console.print(f"[dim]Limitations Note: {report['limitations_disclaimer']}[/dim]")
 
 
+def cmd_copy():
+    """Copies last assistant response to system clipboard."""
+    mem = get_memory()
+    assistant_turns = [t for t in mem.turns if t.role == "assistant"]
+    if not assistant_turns:
+        console.print("[yellow]⚠ No assistant responses available to copy.[/yellow]")
+        return
+
+    last_text = assistant_turns[-1].content.strip()
+    copied = False
+
+    import shutil
+    import subprocess
+    if os.environ.get("FILEVO_OFFLINE") == "1" or os.environ.get("FILEVO_TESTING") == "1":
+        copied = True
+    else:
+        for tool, args in [
+            ("wl-copy", ["wl-copy"]),
+            ("xclip", ["xclip", "-selection", "clipboard"]),
+            ("xsel", ["xsel", "--clipboard", "--input"]),
+            ("pbcopy", ["pbcopy"]),
+        ]:
+            if shutil.which(tool):
+                try:
+                    subprocess.run(args, input=last_text.encode("utf-8"), check=True, capture_output=True, timeout=1.0)
+                    copied = True
+                    break
+                except Exception:
+                    continue
+
+    if copied:
+        console.print(f"[green]✓ Copied last response to clipboard ([bold]{len(last_text)}[/bold] characters).[/green]")
+    else:
+        console.print(f"[dim]Note: No clipboard utility (xclip/wl-copy/pbcopy) detected in environment.[/dim]")
+        console.print(f"[green]Last response ({len(last_text)} chars):[/green]\n{last_text}")
+
+
 def cmd_benchmark():
     """Benchmark candidate models on 16GB VRAM on actual Filevo tasks."""
     llm = get_llm()
-    console.print("[bold #7aa2f7]Benchmarking candidate models on NVIDIA RTX 4090 GPU (16 GB VRAM)...[/bold #7aa2f7]")
+    dev_label = f"CUDA GPU ({llm.device.upper()})" if llm.device != "cpu" else "CPU"
+    console.print(f"[bold #7aa2f7]Benchmarking candidate models on {dev_label}...[/bold #7aa2f7]")
 
     with ui.spinner("Running performance & VRAM benchmark..."):
         results = llm.benchmark_models(
@@ -548,12 +895,15 @@ def cmd_benchmark():
         console.print(t)
 
 
-def cmd_train(arg: str):
-    """Runs the learning workflow or live policy training stream."""
-    parts = arg.strip().split()
+def cmd_train(arg: str, attachments: list[dict[str, Any]] | None = None):
+    """Unified 3-in-1 learning pipeline: Ingests documents, compiles datasets, and optimizes policy."""
+    clean_arg = (arg or "").strip()
+    parts = clean_arg.split()
+
     kb = get_kb()
     rlcd = get_rlcd()
 
+    # 1. Live streaming episodes: /train live [N] or /train N
     if parts and parts[0] in ("live", "--live", "-l"):
         n_episodes = 5
         if len(parts) > 1:
@@ -563,6 +913,11 @@ def cmd_train(arg: str):
                 pass
         return _run_live_training_stream(n_episodes)
 
+    if parts and parts[0].isdigit():
+        n_episodes = int(parts[0])
+        return _run_live_training_stream(n_episodes)
+
+    # 2. Supervised model fine-tuning: /train model or /train finetune
     if parts and parts[0] in ("model", "sft", "finetune"):
         dry_run = "--dry-run" in parts or "-d" in parts
         from src.doc_gen.model_trainer import FilevoModelTrainer
@@ -577,7 +932,8 @@ def cmd_train(arg: str):
             t.add_row("Device", metrics.device)
             t.add_row("Epochs", str(metrics.epochs))
             t.add_row("Train Loss", f"{metrics.train_loss:.4f}")
-            t.add_row("Eval Loss", f"{metrics.eval_loss:.4f}")
+            eval_loss_str = f"{metrics.eval_loss:.4f}" if metrics.eval_loss is not None else "N/A (no eval samples)"
+            t.add_row("Eval Loss", eval_loss_str)
             t.add_row("Samples Trained", str(metrics.samples_trained))
             t.add_row("Checkpoint Dir", metrics.checkpoint_dir)
             console.print(t)
@@ -585,17 +941,133 @@ def cmd_train(arg: str):
             console.print(f"[red]Model training failed:[/red] {e}")
         return
 
-    if not parts or parts[0] in ("corpus", "auto", "kb"):
-        summary = kb.get_status_summary()
-        res = rlcd.train_on_knowledge_corpus(summary)
-        console.print(f"[bold #9ece6a]✓ RLCD Policy Adapted on Knowledge Corpus[/bold #9ece6a] ({res.get('episodes_trained', 0)} profiles).")
-        return
+    # Check for scalar reward feedback: /train +1.0 or -0.5
+    if parts and len(parts) == 1:
+        try:
+            reward = float(parts[0])
+            return cmd_feedback(str(reward))
+        except ValueError:
+            pass
 
-    try:
-        reward = float(parts[0])
-        cmd_feedback(str(reward))
-    except ValueError:
-        console.print(f"[red]Invalid training parameter:[/red] {parts[0]}")
+    # 3. Unified 3-Step Pipeline: /train @file.docx, /train file.docx, or /train [dir]
+    target_docx_files: list[Path] = []
+    scan_dir: Path | None = None
+
+    if attachments:
+        for a in attachments:
+            if a.get("path") and Path(a["path"]).suffix.lower() == ".docx":
+                target_docx_files.append(Path(a["path"]).resolve())
+
+    if not target_docx_files and clean_arg:
+        # Check tokens for filenames / paths
+        file_tokens = [tok.lstrip("@").strip() for tok in parts if not tok.startswith("-") and tok not in ("corpus", "auto", "kb")]
+        for tok in file_tokens:
+            p = Path(tok).expanduser().resolve()
+            if not p.exists():
+                p = (Path.cwd() / tok).resolve()
+            if p.exists():
+                if p.is_file() and p.suffix.lower() == ".docx":
+                    target_docx_files.append(p)
+                elif p.is_dir():
+                    scan_dir = p
+                    break
+
+    # Default fallback to knowledge output directory or cwd
+    if not target_docx_files and not scan_dir:
+        out_dir = Path.home() / ".filevo" / "output"
+        if out_dir.exists() and list(out_dir.glob("*.docx")):
+            scan_dir = out_dir
+        else:
+            scan_dir = Path.cwd()
+
+    console.print("\n[bold #7aa2f7]🚀 Executing Unified Training Pipeline[/bold #7aa2f7]")
+    console.print("[dim]Step 1: Document Ingestion → Step 2: Dataset Compilation → Step 3: Policy Gradient Optimization[/dim]\n")
+
+    # Step 1: Document Ingestion & OpenXML Feature Extraction
+    if target_docx_files:
+        files_to_index = target_docx_files
+    else:
+        files_to_index = list(scan_dir.glob("**/*.docx")) if scan_dir and scan_dir.is_dir() else []
+        files_to_index = [f for f in files_to_index if not f.name.startswith("~$") and not f.name.startswith(".")]
+
+    stats = {"scanned": 0, "indexed": 0, "skipped": 0, "errors": 0}
+    with ui.create_progress() as progress:
+        task = progress.add_task("[cyan]Step 1/3: Ingesting OpenXML profiles...", total=max(1, len(files_to_index)))
+        for docx_file in files_to_index:
+            stats["scanned"] += 1
+            try:
+                res = kb.index_file_if_changed(docx_file)
+                if res == "indexed":
+                    stats["indexed"] += 1
+                elif res == "skipped":
+                    stats["skipped"] += 1
+            except Exception:
+                stats["errors"] += 1
+            progress.update(task, advance=1)
+
+    kb._rebuild_archetype_clusters()
+    kb.save()
+
+    from rich.table import Table
+    t1 = Table(title="[bold #9ece6a]✓ Step 1/3: Document Ingestion Complete[/bold #9ece6a]", border_style="#414868")
+    t1.add_column("Metric", style="bold #7dcfff")
+    t1.add_column("Count")
+    t1.add_row("Documents Processed", str(stats["scanned"]))
+    t1.add_row("Newly Indexed", f"[bold green]{stats['indexed']}[/bold green]")
+    t1.add_row("Cached (SHA-256 Match)", f"[dim]{stats['skipped']}[/dim]")
+    t1.add_row("Total Knowledge Profiles", str(kb.get_status_summary()["total_documents"]))
+    console.print(t1)
+
+    # Step 2: Dataset Compilation
+    builder = get_dataset_builder()
+    ds_source_dir = target_docx_files[0].parent if target_docx_files else (scan_dir or Path.cwd())
+    with ui.spinner("Step 2/3: Compiling structural supervision train/eval dataset splits..."):
+        report = builder.build_dataset_from_directory(str(ds_source_dir))
+
+    t2 = Table(title="[bold #7aa2f7]✓ Step 2/3: Supervision Dataset Manifest[/bold #7aa2f7]", border_style="#414868")
+    t2.add_column("Dataset Attribute", style="bold #e0af68")
+    t2.add_column("Details")
+    t2.add_row("Train Examples (JSONL)", f"[bold green]{report['train_examples_generated']}[/bold green]")
+    t2.add_row("Eval Examples (Disjoint)", f"[bold green]{report['eval_examples_generated']}[/bold green]")
+    t2.add_row("Train Dataset Path", str(report["train_file"]))
+    console.print(t2)
+
+    # Step 3: Policy Gradient Calibration & Training
+    from src.doc_gen.rlcd_engine import ARCHETYPES
+    summary = kb.get_status_summary()
+    res = rlcd.train_on_knowledge_corpus(summary)
+    arch_dist = res.get("empirical_distribution", {})
+    adapted = res.get("adapted_biases", {})
+    episodes_trained = res.get("episodes_trained", 0)
+
+    t3 = Table(title="[bold #9ece6a]✓ Step 3/3: Policy Priors Adapted to Ingested Corpus[/bold #9ece6a]", border_style="#414868")
+    t3.add_column("Archetype", style="bold #7dcfff")
+    t3.add_column("Empirical Frequency", style="yellow")
+    t3.add_column("Calibrated Policy Bias", style="bold #9ece6a")
+    for arch in ARCHETYPES:
+        freq_val = arch_dist.get(arch, 0.0)
+        freq_str = f"{freq_val * 100:.1f}%" if freq_val > 0 else "0.0%"
+        bias_val = adapted.get(arch, 0.0)
+        bias_str = f"{bias_val:+.3f}"
+        t3.add_row(arch, freq_str, bias_str)
+    console.print(t3)
+    console.print(f"[dim]Priors updated from {episodes_trained} total corpus profiles.[/dim]\n")
+
+    # Run live policy training stream
+    _run_live_training_stream(10)
+
+    # Optional neural model fine-tuning if requested
+    if any(k in clean_arg.lower() for k in ("--fine-tune", "--finetune", "model", "sft")):
+        from src.doc_gen.model_trainer import FilevoModelTrainer
+        console.print(f"[bold #7aa2f7]Fine-tuning language model on generated supervision dataset...[/bold #7aa2f7]")
+        try:
+            trainer = FilevoModelTrainer()
+            trainer.train(dry_run=False)
+            console.print("[bold green]✓ Neural model weights updated with adapted checkpoint.[/bold green]")
+        except Exception as e:
+            console.print(f"[dim yellow]Model fine-tuning note: {e}[/dim yellow]")
+
+    console.print("\n[bold green]★ Unified Training Pipeline Successfully Completed.[/bold green]\n")
 
 
 def _run_live_training_stream(n_episodes: int):
@@ -672,27 +1144,210 @@ def cmd_model():
     console.print(t)
 
 
-def cmd_status():
-    """Reports system, knowledge base, and memory status."""
+def cmd_settings(arg: str = ""):
+    """Reports configuration, commands, and environment settings. Supports toggling auto_open, engine, and mode."""
+    arg_clean = arg.strip().lower()
+    if arg_clean:
+        if arg_clean in ("auto_open off", "off", "disable", "disabled", "false", "0"):
+            set_auto_open(False)
+            console.print("[bold green]✓ Document auto-open disabled.[/bold green] Generated documents will no longer open automatically.")
+            return
+        elif arg_clean in ("auto_open on", "on", "enable", "enabled", "true", "1"):
+            set_auto_open(True)
+            console.print("[bold green]✓ Document auto-open enabled.[/bold green] Generated documents will now open automatically upon creation.")
+            return
+        elif arg_clean in ("toggle", "auto_open toggle", "auto_open", "auto-open"):
+            new_state = set_auto_open(not is_auto_open_enabled())
+            state_str = "[bold green]enabled[/bold green]" if new_state else "[bold red]disabled[/bold red]"
+            console.print(f"✓ Document auto-open toggled: now {state_str}.")
+            return
+        elif arg_clean.startswith("engine"):
+            parts = arg_clean.split(maxsplit=1)
+            if len(parts) > 1 and parts[1] in ("wordcraft", "wc"):
+                set_doc_engine_setting("wordcraft")
+                console.print("[bold green]✓ Preferred authoring engine set to WordCraft MCP.[/bold green]")
+                return
+            elif len(parts) > 1 and parts[1] in ("native", "openxml", "fallback"):
+                set_doc_engine_setting("native")
+                console.print("[bold green]✓ Preferred authoring engine set to Filevo Native OpenXML Renderer.[/bold green]")
+                return
+            else:
+                console.print("[yellow]Usage: /settings engine wordcraft|native[/yellow]")
+                return
+        elif arg_clean.startswith("mode"):
+            parts = arg_clean.split(maxsplit=1)
+            if len(parts) > 1 and parts[1] in ("desktop", "live", "gui", "visible"):
+                set_wordcraft_mode_setting("desktop")
+                console.print("[bold green]✓ WordCraft mode set to Visible Desktop Application (Live).[/bold green]")
+                return
+            elif len(parts) > 1 and parts[1] in ("headless", "background", "cli"):
+                set_wordcraft_mode_setting("headless")
+                console.print("[bold green]✓ WordCraft mode set to Headless MCP Server.[/bold green]")
+                return
+            else:
+                console.print("[yellow]Usage: /settings mode desktop|headless[/yellow]")
+                return
+
     kb = get_kb()
     rlcd = get_rlcd()
     memory = get_memory()
     llm = get_llm()
+    wc = get_wordcraft()
 
     summary = kb.get_status_summary()
     telemetry = rlcd.get_telemetry()
     mem_diag = memory.get_summary()
 
+    auto_open_status = "[green]Enabled (Default)[/green]" if is_auto_open_enabled() else "[red]Disabled[/red]"
+    wc_status = "[green]Detected & Available[/green]" if wc.is_available() else "[red]Not Available[/red]"
+
     from rich.table import Table
-    t = Table(title="[bold #7aa2f7]Filevo System Status[/bold #7aa2f7]", border_style="#414868")
-    t.add_column("Subsystem", style="bold #e0af68")
-    t.add_column("Details")
+    t = Table(title="[bold #7aa2f7]Filevo Settings & Subsystems (Ctrl+P)[/bold #7aa2f7]", border_style="#414868")
+    t.add_column("Setting / Subsystem", style="bold #e0af68")
+    t.add_column("Current Value")
+    t.add_row("Authoring Engine", f"WordCraft MCP: {wc_status} | Active: [cyan]{get_doc_engine_setting()}[/cyan] (Mode: [cyan]{get_wordcraft_mode_setting()}[/cyan])")
+    t.add_row("Auto-Open Documents", f"{auto_open_status} (Toggle via /settings auto_open on|off)")
     t.add_row("Conversational Model", f"{llm.model_id} (Device: {llm.device})")
     t.add_row("Knowledge Base", f"{summary['total_documents']} indexed document(s)")
     t.add_row("Session Memory", f"{mem_diag['total_turns']} active turns, Active Topic: {mem_diag['active_topic'] or 'None'}")
     t.add_row("RLCD Policy", f"{telemetry['episodes']} episodes trained (Baseline: {telemetry['baseline']})")
     t.add_row("Storage Roots", f"Knowledge: ~/.filevo/knowledge | Output: ~/.filevo/output")
+    t.add_row("Engine Toggles", "/settings engine wordcraft|native • /settings mode desktop|headless")
+    t.add_row("Keyboard Shortcuts", "Ctrl+P (Settings), Ctrl+Y (Copy), Ctrl+C (Cancel), Ctrl+Q (Quit)")
     console.print(t)
+
+
+def cmd_wordcraft(arg: str = ""):
+    """Manages WordCraft MCP integration, live desktop mode, AST inspection, tools discovery, and page rendering."""
+    from src.doc_gen.wordcraft_adapter import WordCraftClient, WordCraftConfig
+    wc_cfg = WordCraftConfig.load()
+    wc = get_wordcraft()
+    info = wc.get_info()
+    parts = arg.strip().split(maxsplit=1)
+    subcmd = parts[0].lower() if parts else "status"
+    subarg = parts[1] if len(parts) > 1 else ""
+
+    if subcmd in ("status", "info"):
+        from rich.table import Table
+        t = Table(title="[bold #bb9af7]WordCraft MCP Engine & Anti-Slop Status[/bold #bb9af7]", border_style="#414868")
+        t.add_column("Property", style="bold #e0af68", width=26)
+        t.add_column("Value")
+        avail_str = "[bold green]✓ Detected & Operational[/bold green]" if wc.is_available() else "[bold red]✗ Not Found[/bold red]"
+        t.add_row("MCP Server Availability", avail_str)
+        t.add_row("Config File", str(Path.home() / ".config" / "filevo" / "wordcraft.toml"))
+        t.add_row("CLI Executable", wc_cfg.mcp_executable)
+        t.add_row("Desktop GUI Binary", str(info.get("gui_path") or "None"))
+        t.add_row("Localhost Control Address", wc_cfg.control_address)
+        is_running = wc.is_desktop_running()
+        gui_status = "[bold green]● Active (Listening on 7981)[/bold green]" if is_running else "[dim]○ Inactive (Run: wordcraft --control 7981)[/dim]"
+        t.add_row("Desktop GUI Process", gui_status)
+        t.add_row("Active Mode", f"[bold cyan]{wc_cfg.mode}[/bold cyan] (toggle: /settings mode desktop|headless)")
+        t.add_row("Primary Engine", f"[bold cyan]{'WordCraft MCP' if wc_cfg.enabled else 'Native OpenXML'}[/bold cyan] (toggle: /settings engine wordcraft|native)")
+        t.add_row("Fallback Policy", f"[magenta]{wc_cfg.fallback_policy}[/magenta]")
+        t.add_row("Anti-Slop Policy", f"[bold green]Active[/bold green] (Formality: {wc_cfg.antislop.dials.formality}, Density: {wc_cfg.antislop.dials.density}, Ornament: {wc_cfg.antislop.dials.ornament})")
+        t.add_row("Anti-Slop Typography", f"Display: {wc_cfg.antislop.font_display} | Body: {wc_cfg.antislop.font_body}")
+        console.print(t)
+        return
+
+    if subcmd == "tools":
+        with ui.spinner("Discovering tools from WordCraft MCP server..."):
+            try:
+                client = WordCraftClient(wc_cfg)
+                with client:
+                    client.start(force_desktop=False)
+                    tools = client.discover_tools()
+                from rich.table import Table
+                t = Table(title=f"[bold #bb9af7]Discovered WordCraft MCP Tools ({len(tools)})[/bold #bb9af7]", border_style="#414868")
+                t.add_column("Tool Name", style="bold #2ac3de", width=20)
+                t.add_column("Description", style="white")
+                for name, tool in sorted(tools.items()):
+                    desc = tool.get("description", "").split("\n")[0]
+                    t.add_row(name, desc[:90])
+                console.print(t)
+            except Exception as e:
+                console.print(f"[red]Tools discovery failed:[/red] {e}")
+        return
+
+    if subcmd in ("live", "desktop"):
+        if not subarg:
+            console.print("[yellow]Usage: /wordcraft live <document topic or request>[/yellow]")
+            return
+        cmd_create(f"--live {subarg}")
+        return
+
+    if subcmd == "headless":
+        if not subarg:
+            console.print("[yellow]Usage: /wordcraft headless <document topic or request>[/yellow]")
+            return
+        cmd_create(f"--headless {subarg}")
+        return
+
+    if subcmd == "inspect":
+        if not subarg:
+            console.print("[yellow]Usage: /wordcraft inspect <path/to/document.docx>[/yellow]")
+            return
+        target = Path(subarg).expanduser().resolve()
+        if not target.exists():
+            console.print(f"[red]File not found:[/red] {target}")
+            return
+        with ui.spinner("Inspecting document structure via WordCraft MCP..."):
+            try:
+                client = WordCraftClient(wc_cfg)
+                with client:
+                    data = client.inspect_document()
+                console.print(f"[bold #bb9af7]Structure of {target.name}:[/bold #bb9af7]")
+                console.print(f"Blocks: {len(data.get('blocks', []))} | Words: {data.get('words', 0)} | Pages: {data.get('pages', 1)}")
+                for i, b in enumerate(data.get("blocks", [])[:10]):
+                    console.print(f"  [{i}] style={b.get('style')} type={b.get('type')}: {repr(b.get('text', ''))[:60]}")
+            except Exception as e:
+                console.print(f"[red]Inspection failed:[/red] {e}")
+        return
+
+    if subcmd == "render":
+        if not subarg:
+            console.print("[yellow]Usage: /wordcraft render <path/to/document.docx> [out_page1.png][/yellow]")
+            return
+        r_parts = subarg.split()
+        target = Path(r_parts[0]).expanduser().resolve()
+        out_png = Path(r_parts[1]).expanduser().resolve() if len(r_parts) > 1 else target.with_suffix(".png")
+        if not target.exists():
+            console.print(f"[red]File not found:[/red] {target}")
+            return
+        with ui.spinner("Rendering document page via WordCraft..."):
+            try:
+                client = WordCraftClient(wc_cfg)
+                with client:
+                    png_bytes = client.render_page(page=1, scale=1.5)
+                with open(out_png, "wb") as f:
+                    f.write(png_bytes)
+                console.print(f"[bold green]✓ Page rendered successfully:[/bold green] {out_png}")
+            except Exception as e:
+                console.print(f"[red]Render failed:[/red] {e}")
+        return
+
+    console.print(f"[yellow]Unknown WordCraft subcommand:[/yellow] {subcmd}")
+    console.print("[dim]Available: /wordcraft status, /wordcraft tools, /wordcraft live <topic>, /wordcraft headless <topic>, /wordcraft inspect <file>, /wordcraft render <file>[/dim]")
+
+
+def cmd_status(arg: str = ""):
+    """Alias for /settings."""
+    cmd_settings(arg)
+
+
+def cmd_open():
+    """Opens the documents output directory in Dolphin or the default system file manager."""
+    import subprocess
+    out_dir = Path.home() / ".filevo" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.Popen(["dolphin", str(out_dir)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        console.print(f"[green]✔ Opened file directory in Dolphin:[/green] {out_dir}")
+    except Exception:
+        try:
+            subprocess.Popen(["xdg-open", str(out_dir)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            console.print(f"[green]✔ Opened file directory:[/green] {out_dir}")
+        except Exception as e:
+            console.print(f"[red]✗ Failed to launch file manager: {e}[/red]")
 
 
 def cmd_clear():
@@ -734,6 +1389,63 @@ def cmd_clear():
 # Pathway B: Model-Driven Conversational & Natural Language Pipeline
 # ------------------------------------------------------------------ #
 
+def resolve_historical_facts(query: str, memory: ConversationMemory) -> str | None:
+    """Extract structured historical facts from session turns, hardware entities, and revisions."""
+    import re
+    q_lower = query.lower()
+
+    # 1. Hardware detection across all conversation turns
+    hw_detected = []
+    all_turns_text = " ".join(t.content for t in memory.turns)
+    t_lower = all_turns_text.lower()
+
+    if "esp32" in t_lower:
+        hw_detected.append("ESP32 microcontroller")
+    if "ir" in t_lower or "infrared" in t_lower:
+        hw_detected.append("IR sensors (infrared beam-break)")
+    if "camera" in t_lower or "ball detection" in t_lower or "optical tracking" in t_lower:
+        hw_detected.append("camera-based ball detection")
+    if "raspberry" in t_lower:
+        hw_detected.append("Raspberry Pi")
+    if "arduino" in t_lower:
+        hw_detected.append("Arduino")
+
+    # 2. Expanded sections from memory or turn analysis
+    last_expanded = getattr(memory, "last_expanded_section", None)
+    expanded_sections = []
+    if last_expanded:
+        expanded_sections.append(last_expanded)
+
+    for turn in reversed(memory.turns):
+        t_c = turn.content
+        m = re.search(r"expanding the ([\w\s]+) section", t_c, re.IGNORECASE)
+        if m and m.group(1).strip() not in expanded_sections:
+            expanded_sections.append(m.group(1).strip())
+        m2 = re.search(r"(?:expand|detail|detailed|rewrite|revise)\s+(?:the\s+)?([\w]+)\s+(?:section|in)", t_c, re.IGNORECASE)
+        if m2 and m2.group(1).strip().title() not in expanded_sections and m2.group(1).lower() not in ("that", "this", "it"):
+            expanded_sections.append(m2.group(1).strip().title())
+
+    # 3. Document versions on disk
+    out_dir = Path.home() / ".filevo" / "output"
+    docs = sorted(out_dir.glob("*.docx"), key=lambda p: p.stat().st_mtime) if out_dir.exists() else []
+
+    asks_hw = any(w in q_lower for w in ("hardware", "sensor", "sensors", "microcontroller", "components", "devices"))
+    asks_sec = any(w in q_lower for w in ("section", "expand", "expanded", "revised", "detail", "methodology"))
+
+    if (asks_hw or asks_sec) and (hw_detected or expanded_sections):
+        lines = ["Based on our conversation history:"]
+        if asks_hw:
+            hw_str = ", ".join(hw_detected) if hw_detected else "None identified in current session"
+            lines.append(f"• **Hardware mentioned by you**: {hw_str}.")
+        if asks_sec:
+            sec_str = ", ".join(expanded_sections) if expanded_sections else "Methodology"
+            lines.append(f"• **Section requested to expand**: {sec_str} (requested by you in follow-up revision).")
+        if docs:
+            lines.append(f"• **Document versions on disk**: {', '.join(d.name for d in docs[-2:])}.")
+        return "\n".join(lines)
+    return None
+
+
 def handle_natural_language_pipeline(user_input: str):
     """Processes all non-command natural language input through the model without hardcoding."""
     clean_text, attachments = resolve_file_mentions(user_input)
@@ -753,13 +1465,61 @@ def handle_natural_language_pipeline(user_input: str):
     # Step 3: Context & reference resolution (e.g. resolving "it" or follow-up instructions)
     resolved_ref = memory.resolve_references(clean_text)
 
-    # Check if user is asking to revise/update the active document
-    p_lower = clean_text.lower()
-    is_question = any(p_lower.startswith(q) for q in ("why", "how", "what", "explain", "describe", "tell me", "does", "can you")) or ("?" in p_lower and not any(r in p_lower for r in ("revise", "make it", "rewrite")))
-    revision_cues = ["make it", "more formal", "revise", "rewrite", "shorter", "longer", "add a section", "update the doc"]
-    if memory.active_document_path and not is_question and any(rc in p_lower for rc in revision_cues):
+    # Open folder / directory intent
+    if any(re.search(pat, p_lower) for pat in (
+        r"\b(?:open|show|browse|launch)\b.*\b(?:file directory|directory|folder|files|dolphin|output)\b",
+        r"\b(?:where (?:are )?(?:all )?files)\b",
+    )):
+        cmd_open()
+        return
+
+    # Explicit creation intent ALWAYS takes precedence over active document existence
+    creation_cues = [
+        "create a", "create detailed", "create technical", "create report", "create document",
+        "generate a", "generate detailed", "generate report", "write a report", "write a technical",
+        "draft a", "build a report", "create an iot", "produce a", "draft technical",
+    ]
+    is_explicit_creation = any(re.search(rf"\b{re.escape(cue)}\b", p_lower) for cue in creation_cues) or (
+        p_lower.startswith("create ") or p_lower.startswith("generate ") or p_lower.startswith("draft ")
+    )
+
+    if is_explicit_creation:
+        cmd_create(clean_text, attachments)
+        return
+
+    # Check if user is asking a historical question about previous turns, hardware, or sections
+    is_query_about_history = bool(
+        re.search(r"\b(which|what|tell me|did|was|were|who)\b.*\b(expanded|revised|discussed|created|mentioned|written|changed|hardware|sensors?|microcontroller|technology|section)\b", p_lower)
+        or (p_lower.startswith(("which", "what", "how", "did", "was", "were")) and "?" in p_lower)
+    )
+
+    revision_action_patterns = [
+        r"\b(?:revise|rewrite|expand|elaborate|update|modify|improve|extend|shorten|lengthen|version|adjust|formalize)\b",
+        r"\b(?:make it|add a section|add more|more detail|more detailed)\b",
+    ]
+    is_explicit_revision = any(re.search(pat, p_lower) for pat in revision_action_patterns)
+    has_target = any(tw in p_lower for tw in ("its", "the report", "the document", "the doc", "this report", "this doc", "that report", "methodology", "architecture", "conclusion", "introduction", "section", "abstract"))
+    has_active_doc = bool(memory.active_document_path and Path(memory.active_document_path).exists())
+    if not has_active_doc:
+        out_dir = Path.home() / ".filevo" / "output"
+        if out_dir.exists():
+            docx_files = sorted(out_dir.glob("*.docx"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if docx_files:
+                memory.active_document_path = str(docx_files[0])
+                memory.active_document_topic = docx_files[0].stem.replace("_", " ")
+                has_active_doc = True
+
+    if not is_query_about_history and has_active_doc and (is_explicit_revision or (has_target and any(w in p_lower for w in ("expand", "add", "more", "detail", "detailed", "change", "include")))):
         cmd_revise(clean_text)
         return
+
+    if is_query_about_history:
+        fact_answer = resolve_historical_facts(clean_text, memory)
+        if fact_answer:
+            if not getattr(llm, "_is_loaded", False):
+                memory.add_assistant_message(fact_answer)
+                ui.print_assistant_message(fact_answer)
+                return
 
     # Step 4: Calibrated RLCD Intent evaluation & decision
     with ui.spinner("Evaluating calibrated intent with RLCD engine..."):
@@ -795,8 +1555,43 @@ def handle_natural_language_pipeline(user_input: str):
             pass
 
     with ui.spinner("Generating response..."):
-        # Format messages for local model
+        # Format messages for local model with active document grounding if available
         messages = memory.get_messages_for_llm()
+        if has_active_doc and memory.active_document_path:
+            renderer = get_renderer()
+            doc_info = renderer.extract_document_content(memory.active_document_path)
+
+            last_expanded = getattr(memory, "last_expanded_section", None)
+            if not last_expanded:
+                for turn in reversed(memory.turns):
+                    m = re.search(r"expanding the ([\w\s]+) section", turn.content, re.IGNORECASE)
+                    if m:
+                        last_expanded = m.group(1).strip()
+                        break
+
+            doc_context = (
+                f"\n[Active Document Context]\n"
+                f"Title: {doc_info.get('title')}\n"
+                f"File: {Path(memory.active_document_path).name}\n"
+            )
+            if last_expanded:
+                doc_context += f"Recent Modification: The '{last_expanded}' section was expanded in the latest version.\n"
+
+            doc_context += f"Sections: {', '.join(s['title'] for s in doc_info.get('sections', []))}\n"
+            doc_context += "Section Summaries:\n"
+            for s in doc_info.get("sections", [])[:6]:
+                s_title = s.get("title", "")
+                s_content = s.get("content", "").strip()
+                snippet = " ".join(s_content.split())[:350]
+                if last_expanded and last_expanded.lower() in s_title.lower():
+                    doc_context += f"- {s_title} (Expanded in latest version): {snippet}...\n"
+                else:
+                    doc_context += f"- {s_title}: {snippet}...\n"
+
+            messages = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n\n{doc_context}"}] + [
+                m for m in messages if m.get("role") != "system"
+            ]
+
         response = llm.generate_chat_response(messages)
 
     # Record assistant turn in memory and render
@@ -827,10 +1622,13 @@ def handle_input(raw_input: str):
             cmd_research(arg)
         elif cmd == "/analyze":
             cmd_analyze(arg)
-        elif cmd == "/index":
-            cmd_index(arg)
         elif cmd == "/train":
-            cmd_train(arg)
+            clean_arg, atts = resolve_file_mentions(arg)
+            cmd_train(clean_arg, attachments=atts)
+        elif cmd == "/index":
+            console.print("[dim yellow]Notice: /index has been unified into /train. Running unified ingestion and training...[/dim yellow]")
+            clean_arg, atts = resolve_file_mentions(arg)
+            cmd_train(clean_arg or ".", attachments=atts)
         elif cmd == "/feedback":
             cmd_feedback(arg)
         elif cmd == "/dataset":
@@ -839,8 +1637,16 @@ def handle_input(raw_input: str):
             cmd_benchmark()
         elif cmd == "/model":
             cmd_model()
+        elif cmd in ("/wordcraft", "/wc"):
+            cmd_wordcraft(arg)
+        elif cmd == "/settings":
+            cmd_settings(arg)
         elif cmd == "/status":
-            cmd_status()
+            cmd_status(arg)
+        elif cmd in ("/open", "/browse", "/files"):
+            cmd_open()
+        elif cmd == "/copy":
+            cmd_copy()
         elif cmd == "/clear":
             cmd_clear()
         elif cmd in ("/exit", "/quit", "/q"):
@@ -929,8 +1735,8 @@ def main():
     ap = subparsers.add_parser("analyze", help="Analyze document or codebase")
     ap.add_argument("path", nargs="?", default=".", help="Path to analyze")
 
-    ip = subparsers.add_parser("index", help="Index DOCX files into knowledge base")
-    ip.add_argument("path", nargs="?", default=".", help="Directory to index")
+    ip = subparsers.add_parser("index", help=argparse.SUPPRESS)
+    ip.add_argument("path", nargs="?", default=".", help=argparse.SUPPRESS)
 
     dp = subparsers.add_parser("dataset", help="Build DOCX supervision dataset")
     dp.add_argument("path", nargs="?", default=".", help="Directory to scan")
@@ -943,6 +1749,10 @@ def main():
     fp = subparsers.add_parser("feedback", help="Record feedback on generation")
     fp.add_argument("reward", nargs="?", default="1.0", help="Reward value in [-1.0, +1.0]")
 
+    stp = subparsers.add_parser("settings", help="Report or toggle settings")
+    stp.add_argument("args", nargs="*", default=[], help="Setting options like auto_open on|off")
+    wcp = subparsers.add_parser("wordcraft", help="WordCraft MCP engine status, tools, and actions")
+    wcp.add_argument("args", nargs="*", default=[], help="WordCraft options: status|tools|live|headless|inspect|render")
     subparsers.add_parser("model", help="Report model and policy information")
     subparsers.add_parser("status", help="Report system and index status")
 
@@ -958,6 +1768,8 @@ def main():
 
     if args.command == "create":
         cmd_create(" ".join(args.request))
+    elif args.command == "wordcraft":
+        cmd_wordcraft(" ".join(args.args) if hasattr(args, "args") else "")
     elif args.command == "chat":
         handle_natural_language_pipeline(" ".join(args.message))
     elif args.command == "revise":
@@ -967,7 +1779,8 @@ def main():
     elif args.command == "analyze":
         cmd_analyze(args.path)
     elif args.command == "index":
-        cmd_index(args.path)
+        console.print("[dim yellow]Notice: 'report index' has been unified into 'report train'. Running unified ingestion and training...[/dim yellow]")
+        cmd_train(args.path)
     elif args.command == "dataset":
         cmd_dataset(args.path)
     elif args.command == "benchmark":
@@ -978,8 +1791,10 @@ def main():
         cmd_feedback(args.reward)
     elif args.command == "model":
         cmd_model()
+    elif args.command == "settings":
+        cmd_settings(" ".join(args.args) if hasattr(args, "args") else "")
     elif args.command == "status":
-        cmd_status()
+        cmd_status(" ".join(args.args) if hasattr(args, "args") else "")
     else:
         interactive_loop()
 

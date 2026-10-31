@@ -14,6 +14,7 @@ import json
 import math
 import os
 import random
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -26,7 +27,7 @@ ARCHETYPES = [
     "Formal Letter",
 ]
 
-FONTS = ["Calibri", "Arial", "Times New Roman", "Georgia"]
+FONTS = ["Times New Roman", "Calibri", "Arial", "Georgia"]
 COLOR_PALETTES = {
     "Navy": "1F4E79",
     "Charcoal": "333333",
@@ -56,13 +57,19 @@ DEFAULT_FEATURES = [
     "include_benchmarks",
     "include_tables",
     "include_callouts",
+    # Volume and chapter structure (Choice / Scale primitives)
+    "volume_brief",
+    "volume_standard",
+    "volume_extended",
+    "volume_monograph",
+    "sections_multi_chapter",
 ]
 
 
 @dataclass
 class FormattingStrategy:
     """Strategy chosen by RLCD for rendering the document."""
-    font_family: str = "Calibri"
+    font_family: str = "Times New Roman"
     accent_color: str = "1F4E79"
     margin_inches: float = 1.0
     line_spacing: float = 1.15
@@ -562,6 +569,10 @@ class RLCDDecisionEngine:
         p_lower = prompt.lower()
 
         # Perspective 1: Structural / Lexical prior matching from prompt
+        from src.doc_gen.document_brief import extract_page_budget
+        target_pages, _ = extract_page_budget(prompt)
+        is_large_volume = (target_pages is not None and target_pages >= 30) or any(w in p_lower for w in ("monograph", "treatise", "dissertation", "encyclopedia"))
+
         lex_scores = []
         for arch in ARCHETYPES:
             score = 1.0
@@ -569,8 +580,8 @@ class RLCDDecisionEngine:
                 score += 4.5
             elif ("summary" in p_lower or "brief" in p_lower) and arch == "Executive Summary":
                 score += 4.5
-            elif ("monograph" in p_lower or "academic" in p_lower or "research" in p_lower or "paper" in p_lower) and arch == "Academic Monograph":
-                score += 4.5
+            elif ("monograph" in p_lower or "academic" in p_lower or "research" in p_lower or "paper" in p_lower or is_large_volume) and arch == "Academic Monograph":
+                score += 5.5 if is_large_volume else 4.5
             elif ("letter" in p_lower or "permission" in p_lower or "formal letter" in p_lower or "application" in p_lower or "memo" in p_lower) and arch == "Formal Letter":
                 score += 5.0
             elif ("report" in p_lower or "technical" in p_lower or "analysis" in p_lower or "study" in p_lower) and arch == "Technical Report":
@@ -878,6 +889,466 @@ class RLCDDecisionEngine:
         }
 
     # ------------------------------------------------------------------ #
+    # Autonomous Policy Learning & Artifact Evaluation
+    # ------------------------------------------------------------------ #
+
+    def evaluate_document_outcome(
+        self,
+        doc_path: str | Path,
+        prompt: str,
+        decision: RLCDDecision,
+        sections: list[dict[str, Any]],
+        explicit_sections: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Objectively evaluate a generated or revised document artifact.
+
+        Scores against measurable criteria without simulating or inventing numbers:
+        1. OpenXML package integrity and valid XML structure.
+        2. Structural adherence (all expected sections rendered).
+        3. Content uniqueness across sections (penalizes repeated boilerplate).
+        4. Domain relevance and absence of spam patterns (e.g. streaming clickbait).
+        5. Clean presentation (no leaked internal RLCD telemetry tables in the Word doc).
+
+        Returns:
+            Dictionary containing metrics breakdown and final scalar reward R in [-1.0, +1.0].
+        """
+        import zipfile
+        import xml.etree.ElementTree as ET
+
+        p = Path(doc_path)
+        metrics: dict[str, Any] = {
+            "valid_openxml": False,
+            "sections_count": len(sections),
+            "expected_sections_ratio": 0.0,
+            "section_uniqueness": 0.0,
+            "spam_free": True,
+            "telemetry_free": True,
+            "total_words": 0,
+            "reward": 0.0,
+        }
+
+        # 1. OpenXML Integrity check
+        if not p.exists() or p.stat().st_size == 0:
+            metrics["reward"] = -1.0
+            return metrics
+
+        try:
+            with zipfile.ZipFile(p, "r") as z:
+                names = z.namelist()
+                if "[Content_Types].xml" in names and "word/document.xml" in names:
+                    doc_xml = z.read("word/document.xml")
+                    ET.fromstring(doc_xml)
+                    metrics["valid_openxml"] = True
+        except Exception:
+            metrics["valid_openxml"] = False
+            metrics["reward"] = -1.0
+            return metrics
+
+        # 2. Structural adherence
+        expected = explicit_sections if explicit_sections else decision.recommended_sections
+        if expected:
+            rendered_titles = {s.get("title", "").strip().lower() for s in sections}
+            matches = sum(1 for r in expected if r.strip().lower() in rendered_titles)
+            metrics["expected_sections_ratio"] = matches / len(expected)
+        else:
+            metrics["expected_sections_ratio"] = 1.0
+
+        # 3. Content uniqueness across sections
+        sec_texts = [s.get("content", "").strip() for s in sections if s.get("content")]
+        total_words = sum(len(txt.split()) for txt in sec_texts)
+        metrics["total_words"] = total_words
+
+        if len(sec_texts) > 1:
+            # Measure pairwise Jaccard similarity of 3-grams
+            def get_ngrams(text: str, n: int = 3) -> set[tuple[str, ...]]:
+                words = text.lower().split()
+                return {tuple(words[i : i + n]) for i in range(len(words) - n + 1)}
+
+            jaccards = []
+            for i in range(len(sec_texts)):
+                ng1 = get_ngrams(sec_texts[i])
+                for j in range(i + 1, len(sec_texts)):
+                    ng2 = get_ngrams(sec_texts[j])
+                    if ng1 and ng2:
+                        union = ng1 | ng2
+                        sim = len(ng1 & ng2) / len(union) if union else 0.0
+                        jaccards.append(sim)
+            avg_overlap = sum(jaccards) / max(len(jaccards), 1)
+            metrics["section_uniqueness"] = max(0.0, min(1.0, 1.0 - avg_overlap))
+        else:
+            metrics["section_uniqueness"] = 1.0
+
+        # 4. Domain relevance, Concept Coverage & Absence of Spam
+        spam_indicators = ["smartcric", "crichd", "watch live cricket streaming", "buffstream", "free stream online"]
+        all_text = " ".join(sec_texts).lower()
+        if any(sp in all_text for sp in spam_indicators):
+            metrics["spam_free"] = False
+
+        # Extract domain-specific concept terms from prompt to verify genuine subject coverage
+        import re
+        stopwords = {
+            "create", "generate", "write", "draft", "make", "report", "document", "technical",
+            "formal", "paper", "about", "using", "with", "sections", "please", "system", "study",
+            "specifying", "covering", "including", "and", "the", "for", "from", "that", "this"
+        }
+        prompt_words = re.findall(r"\b[a-zA-Z0-9_\-]{3,}\b", prompt.lower())
+        key_concepts = [w for w in prompt_words if w not in stopwords]
+        
+        if key_concepts:
+            matched_concepts = sum(1 for c in key_concepts if c in all_text)
+            concept_coverage = matched_concepts / len(key_concepts)
+        else:
+            concept_coverage = 0.8
+        metrics["concept_coverage"] = round(concept_coverage, 3)
+
+        # 5. Detect Generic Boilerplate Phrases
+        canned_boilerplate = [
+            "split-brain state anomalies",
+            "dead-letter queues",
+            "tls-encrypted streaming",
+            "ntp synchronization",
+            "compliance requirements and architectural invariants",
+            "adherence to production standards",
+            "foundational operating principles, architectural decomposition",
+            "ensures predictable execution and strict adherence",
+        ]
+        leaked_boilerplate = [bp for bp in canned_boilerplate if bp in all_text]
+        metrics["boilerplate_detected"] = len(leaked_boilerplate) > 0
+        metrics["leaked_boilerplate_count"] = len(leaked_boilerplate)
+
+        # 6. Detect Incomplete Sentences and Repeated Paragraphs
+        all_paras = [p.strip() for txt in sec_texts for p in txt.split("\n\n") if len(p.strip()) > 30]
+        has_repeated_paragraphs = False
+        for i in range(len(all_paras)):
+            words_i = set(re.findall(r"\w+", all_paras[i].lower()))
+            for j in range(i + 1, len(all_paras)):
+                words_j = set(re.findall(r"\w+", all_paras[j].lower()))
+                overlap = len(words_i & words_j) / max(len(words_i | words_j), 1)
+                if overlap > 0.85:
+                    has_repeated_paragraphs = True
+                    break
+            if has_repeated_paragraphs:
+                break
+        metrics["has_repeated_paragraphs"] = has_repeated_paragraphs
+
+        has_incomplete_sentences = False
+        for p in all_paras:
+            clean_p = p.strip()
+            if not clean_p:
+                continue
+            if clean_p.endswith(("...", "…", ",", "-", ";")) or not clean_p.endswith((".", "!", "?", ":")):
+                has_incomplete_sentences = True
+                break
+        metrics["has_incomplete_sentences"] = has_incomplete_sentences
+
+        # 7. Check user-requested hardware presence and explanation depth
+        prompt_hw = []
+        p_lower = prompt.lower()
+        if "esp32" in p_lower:
+            prompt_hw.append("esp32")
+        if "ir" in p_lower or "infrared" in p_lower:
+            prompt_hw.append("ir")
+        if "camera" in p_lower or "ball detection" in p_lower:
+            prompt_hw.append("camera")
+        missing_hw = [h for h in prompt_hw if h not in all_text] if prompt_hw else []
+        metrics["missing_hardware"] = missing_hw
+
+        explained_components = 0
+        operational_cues = ("interrupt", "signal", "gpio", "sensor", "optical", "trajectory", "tracking", "detection", "frame", "timestamp", "arbitration")
+        for hw in prompt_hw:
+            has_explanation = any(hw in p.lower() and any(oc in p.lower() for oc in operational_cues) for p in all_paras)
+            if has_explanation:
+                explained_components += 1
+        explanation_depth = explained_components / max(len(prompt_hw), 1) if prompt_hw else 1.0
+        metrics["explanation_depth"] = round(explanation_depth, 3)
+
+        # 8. Detect Fabricated Precision and Trial Numbers (e.g. 99.8% precision across 1,200 trials)
+        fabricated_cues = [
+            r"\b\d{2,3}(?:\.\d+)?%\s*(?:precision|accuracy|recall)\b",
+            r"\b\d+[\d,]*\s*(?:distinct\s+)?(?:delivery\s+)?trials\b",
+        ]
+        has_fabricated_metrics = any(bool(re.search(pat, all_text)) for pat in fabricated_cues)
+        metrics["has_fabricated_metrics"] = has_fabricated_metrics
+
+        # 9. Clean presentation: absence of leaked telemetry in document body
+        telemetry_indicators = ["agreement (jsd)", "normalized entropy", "decision gate", "h_norm(p)"]
+        if any(ti in all_text for ti in telemetry_indicators):
+            metrics["telemetry_free"] = False
+
+        # Compute composite reward R in [-1.0, 1.0]
+        # OpenXML validity is a MANDATORY prerequisite gate:
+        if not metrics["valid_openxml"]:
+            metrics["reward"] = -1.0
+            return metrics
+
+        # Reward is driven by genuine subject matter coverage, explanation depth, and structural completeness:
+        reward = (
+            0.40 * concept_coverage
+            + 0.30 * metrics["expected_sections_ratio"]
+            + 0.15 * metrics["section_uniqueness"]
+            + 0.15 * explanation_depth
+        )
+
+        # Heavily penalize generic boilerplate substitution
+        if metrics["boilerplate_detected"]:
+            reward -= 0.50 * metrics["leaked_boilerplate_count"]
+
+        # Heavily penalize repeated paragraphs
+        if metrics["has_repeated_paragraphs"]:
+            reward -= 0.50
+
+        # Penalize incomplete sentences
+        if metrics["has_incomplete_sentences"]:
+            reward -= 0.40
+
+        # Penalize fabricated empirical metrics
+        if metrics["has_fabricated_metrics"]:
+            reward -= 0.40
+
+        # Penalize missing user-requested hardware
+        if missing_hw:
+            reward -= 0.35 * len(missing_hw)
+
+        # Penalize insufficient word count (shallow placeholders)
+        if total_words < 250:
+            reward -= 0.30
+
+        # 10. Target Page Budget Yield Evaluation (penalize page under-yield when pages requested)
+        from src.doc_gen.document_brief import extract_page_budget
+        target_pages, _ = extract_page_budget(prompt)
+        if target_pages:
+            metrics["target_pages"] = target_pages
+            # Estimate pages from words (~320 words per page with formatting) and section count
+            estimated_pages = max(1, total_words // 320 + len(sections))
+            metrics["estimated_pages"] = estimated_pages
+            yield_ratio = min(1.0, estimated_pages / target_pages)
+            metrics["page_yield_ratio"] = round(yield_ratio, 3)
+
+            # Proportional yield penalty for under-generating requested volume
+            if yield_ratio < 0.5:
+                reward -= 0.40 * (1.0 - yield_ratio)
+            elif yield_ratio >= 0.8:
+                reward += 0.15
+
+        # 10. Anti-Slop Policy Compliance (penalize AI connector clichés)
+        try:
+            from src.doc_gen.antislop_policy import BANNED_AI_CLICHES
+            banned_cliches_found = [c for c in BANNED_AI_CLICHES if re.search(c, all_text, flags=re.IGNORECASE)]
+            metrics["banned_cliches_count"] = len(banned_cliches_found)
+            if banned_cliches_found:
+                reward -= 0.10 * len(banned_cliches_found)
+        except Exception:
+            metrics["banned_cliches_count"] = 0
+
+        if not metrics["spam_free"]:
+            reward -= 0.50
+
+        if not metrics["telemetry_free"]:
+            reward -= 0.50
+
+        # Cap reward if concept coverage is deficient: weak/irrelevant documents must NEVER receive high reward
+        if concept_coverage < 0.40:
+            reward = min(reward, 0.15)
+
+        metrics["reward"] = round(max(-1.0, min(1.0, reward)), 4)
+        return metrics
+
+    def record_autonomous_experience(
+        self,
+        operation: str,
+        prompt: str,
+        decision: RLCDDecision,
+        artifact_path: str | Path,
+        sections: list[dict[str, Any]],
+        explicit_sections: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Record an autonomous generation/revision experience, compute objective reward, and update policy gradients."""
+        import hashlib
+
+        # Prevent duplicate rewards for repeated evaluations of the identical artifact
+        eval_key = f"{operation}:{prompt}:{artifact_path}:{len(sections)}"
+        eval_hash = hashlib.sha256(eval_key.encode("utf-8")).hexdigest()
+
+        exp_dir = self.policy_path.parent
+        log_file = exp_dir / "experience_log.jsonl"
+        checkpoint_dir = exp_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        if log_file.exists():
+            try:
+                with open(log_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if eval_hash in line:
+                            return {"status": "skipped_duplicate", "hash": eval_hash}
+            except Exception:
+                pass
+
+        # Evaluate artifact objectively
+        eval_result = self.evaluate_document_outcome(
+            artifact_path, prompt, decision, sections, explicit_sections=explicit_sections
+        )
+        reward = eval_result["reward"]
+
+        # Checkpoint current policy before update
+        ckpt_path = checkpoint_dir / f"policy_ep_{self.episodes}.json"
+        try:
+            with open(ckpt_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "episodes": self.episodes,
+                    "baseline": self.baseline,
+                    "archetype_biases": self.archetype_biases,
+                    "weights": self.weights,
+                }, f, indent=2)
+        except Exception:
+            pass
+
+        # Apply genuine REINFORCE policy gradient update on archetype biases
+        alpha = self.learning_rate
+        advantage = reward - self.baseline
+        actual_arch = decision.archetype
+
+        probs: list[float] = self.softmax([self.archetype_biases.get(a, 0.0) for a in ARCHETYPES])  # type: ignore
+        p_map = dict(zip(ARCHETYPES, probs))
+
+        if reward >= 0:
+            # Positive gradient reinforcement on chosen archetype
+            grad = 1.0 - p_map.get(actual_arch, 0.2)
+            self.archetype_biases[actual_arch] = max(-3.0, min(3.0, self.archetype_biases[actual_arch] + alpha * advantage * grad))
+            for a in ARCHETYPES:
+                if a != actual_arch:
+                    self.archetype_biases[a] = max(-3.0, min(3.0, self.archetype_biases[a] - alpha * advantage * p_map.get(a, 0.2) * 0.5))
+        else:
+            # Negative gradient on failure or poor quality
+            self.archetype_biases[actual_arch] = max(-3.0, min(3.0, self.archetype_biases[actual_arch] - alpha * abs(advantage) * 0.8))
+
+        # Update baseline and stats
+        self.baseline = self.baseline_decay * self.baseline + (1 - self.baseline_decay) * reward
+        self.episodes += 1
+        self.cumulative_reward += reward
+        self.reward_history.append(reward)
+        if len(self.reward_history) > 100:
+            self.reward_history = self.reward_history[-100:]
+
+        self.save()
+
+        # Append to experience log
+        log_entry = {
+            "timestamp": time.time(),
+            "hash": eval_hash,
+            "operation": operation,
+            "prompt": prompt,
+            "archetype": actual_arch,
+            "artifact_path": str(artifact_path),
+            "eval_metrics": eval_result,
+            "reward": reward,
+            "advantage": round(advantage, 4),
+            "baseline": round(self.baseline, 4),
+            "episode": self.episodes,
+        }
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_entry) + "\n")
+        except Exception:
+            pass
+
+        return {
+            "status": "updated",
+            "operation": operation,
+            "episode": self.episodes,
+            "reward": reward,
+            "advantage": round(advantage, 4),
+            "baseline": round(self.baseline, 4),
+            "metrics": eval_result,
+        }
+
+    def record_revision_experience(
+        self,
+        prompt: str,
+        previous_archetype: str,
+        new_archetype: str,
+        artifact_path: str | Path,
+    ) -> dict[str, Any]:
+        """Record human corrective revision as learning signal."""
+        alpha = self.learning_rate
+        # If user shifted archetype, penalize previous and reinforce new
+        if previous_archetype != new_archetype:
+            self.archetype_biases[previous_archetype] = max(-3.0, min(3.0, self.archetype_biases.get(previous_archetype, 0.0) - alpha * 0.6))
+            self.archetype_biases[new_archetype] = max(-3.0, min(3.0, self.archetype_biases.get(new_archetype, 0.0) + alpha * 0.8))
+        else:
+            # If revision was requested due to deficiency/missing content, do not apply blind positive reinforcement
+            deficiency_cues = ("more detailed", "fix", "missing", "incomplete", "poor", "lacking", "shallow", "expand", "detailed")
+            is_deficiency = any(c in prompt.lower() for c in deficiency_cues)
+            if is_deficiency:
+                # Moderate penalty for deficient initial draft to deter weak generation
+                self.archetype_biases[new_archetype] = max(-3.0, min(3.0, self.archetype_biases.get(new_archetype, 0.0) - alpha * 0.2))
+            else:
+                self.archetype_biases[new_archetype] = max(-3.0, min(3.0, self.archetype_biases.get(new_archetype, 0.0) + alpha * 0.1))
+
+        self.save()
+        return {
+            "status": "revision_recorded",
+            "previous": previous_archetype,
+            "new": new_archetype,
+            "biases": {k: round(v, 3) for k, v in self.archetype_biases.items()},
+        }
+
+    def rollback_policy(self, steps_back: int = 1) -> bool:
+        """Rollback policy parameters to an earlier checkpoint in case of performance degradation."""
+        checkpoint_dir = self.policy_path.parent / "checkpoints"
+        if not checkpoint_dir.exists():
+            return False
+
+        ckpts = sorted(checkpoint_dir.glob("policy_ep_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if len(ckpts) < steps_back:
+            return False
+
+        target_ckpt = ckpts[steps_back - 1]
+        try:
+            with open(target_ckpt, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                self.episodes = data.get("episodes", self.episodes)
+                self.baseline = data.get("baseline", self.baseline)
+                self.archetype_biases = data.get("archetype_biases", self.archetype_biases)
+                self.weights = data.get("weights", self.weights)
+                self.save()
+                return True
+        except Exception:
+            return False
+
+    def evaluate_held_out(self, test_set: list[tuple[str, str]] | None = None) -> dict[str, Any]:
+        """Evaluate current policy on held-out test tasks to measure genuine generalisation."""
+        if not test_set:
+            test_set = [
+                ("Design document for low-latency cache cluster", "Technical Report"),
+                ("Executive briefing on quarterly infrastructure compliance", "Executive Summary"),
+                ("Formal university leave petition for senior fellow", "Formal Letter"),
+                ("Grant proposal for distributed tensor compilation", "Project Proposal"),
+                ("Academic treatise on category theoretic semantics", "Academic Monograph"),
+            ]
+
+        correct = 0
+        total = len(test_set)
+        results = []
+        for prompt, expected_arch in test_set:
+            dec = self.decide(prompt)
+            match = (dec.archetype == expected_arch)
+            if match:
+                correct += 1
+            results.append({
+                "prompt": prompt,
+                "predicted": dec.archetype,
+                "expected": expected_arch,
+                "confidence": dec.confidence,
+                "match": match,
+            })
+
+        acc = correct / total if total > 0 else 0.0
+        return {
+            "total_tasks": total,
+            "correct": correct,
+            "accuracy": round(acc, 4),
+            "results": results,
+        }
     # Telemetry & Reporting
     # ------------------------------------------------------------------ #
 

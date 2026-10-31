@@ -1,0 +1,18 @@
+[package]
+name = "filevo-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+filevo-docx = { path = "../filevo-docx" }
+filevo-eval = { path = "../filevo-eval" }
+filevo-inference = { path = "../filevo-inference" }
+filevo-memory = { path = "../filevo-memory" }
+filevo-policy = { path = "../filevo-policy" }
+filevo-store = { path = "../filevo-store" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.17"

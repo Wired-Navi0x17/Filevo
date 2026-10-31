@@ -6,13 +6,19 @@ use crate::app::App;
 use crate::model::Dashboard;
 use crate::ui::text::{truncate, width};
 use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
 
-fn label(icon: &'static str, name: &str, value: &str, theme: &Theme, max_width: usize) -> Line<'static> {
+fn label(
+    icon: &'static str,
+    name: &str,
+    value: &str,
+    theme: &Theme,
+    max_width: usize,
+) -> Line<'static> {
     let prefix = format!("{icon} {name}: ");
     let prefix_width = width(&prefix);
     let budget = max_width.saturating_sub(prefix_width);
@@ -62,12 +68,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if area.width < 4 || area.height < 2 {
         return;
     }
-    let block = theme.panel().title(Span::styled(
-        " Model ",
-        Style::default()
-            .fg(theme.text)
-            .add_modifier(Modifier::BOLD),
-    ));
+    let ticker = crate::ui::art::radar_glyph(app.tick);
+    let block = theme.panel().title(Line::from(vec![
+        Span::styled(format!(" {} ", ticker), Style::default().fg(theme.primary)),
+        Span::styled(
+            "Model ",
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ),
+    ]));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {

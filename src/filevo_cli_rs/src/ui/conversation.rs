@@ -1,19 +1,13 @@
-//! Conversation panel with measured word wrapping and scroll offsets.
-//!
-//! The panel builds every visual line before rendering so the application can
-//! remember an exact `max_top` for PageUp/PageDown and for preserving the
-//! reading position when a new reply arrives.
-
 use crate::app::App;
 use crate::model::{Message, Role};
-use crate::ui::art::{owl_width, OWL};
+use crate::ui::art::{activity_ticker, cat_animation_lines, pulse_wave};
 use crate::ui::text::{spaces, truncate, width, wrap};
 use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Metrics {
@@ -34,44 +28,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Metric
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let inner_width = inner.width as usize;
-    let body_gutter = if inner_width >= 72 {
-        owl_width() + 2
-    } else {
-        2
-    };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     if app.messages.is_empty() {
-        lines.push(Line::default());
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(
-                theme.glyph("❯", ">"),
-                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " No conversation yet",
-                Style::default()
-                    .fg(theme.text)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.push(Line::from(Span::styled(
-            "    Type a message or a /command below.",
-            Style::default().fg(theme.text_dim),
-        )));
-        if !app.demo {
-            lines.push(Line::from(Span::styled(
-                "    Connecting to the Filevo daemon…",
-                Style::default().fg(theme.muted),
-            )));
-        }
+        render_welcome_state(&mut lines, inner_width, inner.height as usize, app.tick, theme);
     } else {
         for (index, message) in app.messages.iter().enumerate() {
             if index > 0 {
                 lines.push(Line::default());
             }
-            push_message(&mut lines, message, inner_width, body_gutter, theme);
+            push_message(&mut lines, message, inner_width, theme);
         }
     }
 
@@ -84,10 +50,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Metric
         app.scroll_top.min(max_top)
     };
 
-    let paragraph = Paragraph::new(Text::from(lines)).scroll((
-        top.min(u16::MAX as usize) as u16,
-        0,
-    ));
+    let paragraph =
+        Paragraph::new(Text::from(lines)).scroll((top.min(u16::MAX as usize) as u16, 0));
     frame.render_widget(paragraph, inner);
 
     Metrics {
@@ -97,24 +61,96 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Metric
     }
 }
 
+fn render_welcome_state(
+    lines: &mut Vec<Line<'static>>,
+    inner_width: usize,
+    viewport_height: usize,
+    tick: u64,
+    theme: &Theme,
+) {
+    let show_cat = inner_width >= 40 && viewport_height >= 18;
+    let top_pad = if show_cat {
+        (viewport_height.saturating_sub(26) / 3).min(2)
+    } else {
+        (viewport_height.saturating_sub(12) / 3).min(4)
+    };
+    for _ in 0..top_pad {
+        lines.push(Line::default());
+    }
+
+    if show_cat {
+        let cat = cat_animation_lines(tick, theme);
+        lines.extend(cat);
+        lines.push(Line::default());
+    } else {
+        let wave_width = inner_width.saturating_sub(10).min(42);
+        let wave = pulse_wave(tick, wave_width);
+        lines.push(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(wave, Style::default().fg(theme.primary)),
+            Span::styled(
+                format!(" {}", activity_ticker(tick)),
+                Style::default().fg(theme.secondary),
+            ),
+        ]));
+        lines.push(Line::default());
+    }
+
+    lines.push(Line::from(vec![
+        Span::raw("   "),
+        Span::styled(
+            "✦ Filevo Intelligence Online",
+            Style::default()
+                .fg(theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · RLCD Policy Active", Style::default().fg(theme.text_dim)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("   "),
+        Span::styled(
+            "Author professional Word documents via ArtCraft WordCraft with zero AI slop.",
+            Style::default().fg(theme.text_dim),
+        ),
+    ]));
+    lines.push(Line::default());
+
+    let shortcuts = [
+        ("/create <topic>", "Generate complete DOCX, PDF & visual preview"),
+        ("/create --live <topic>", "Watch live composition in WordCraft desktop"),
+        ("/train @sample.docx", "Adapt RLCD policy and structure from file"),
+        ("/wordcraft status", "Inspect WordCraft MCP server connection & tools"),
+    ];
+
+    for (cmd, desc) in shortcuts {
+        lines.push(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                format!("{:<26}", cmd),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(desc, Style::default().fg(theme.muted)),
+        ]));
+    }
+}
+
 fn push_message(
     lines: &mut Vec<Line<'static>>,
     message: &Message,
     inner_width: usize,
-    body_gutter: usize,
     theme: &Theme,
 ) {
     let (name, marker, role_style) = match (message.role, message.is_error) {
         (Role::User, _) => (
             "You",
             theme.glyph("❯", ">"),
-            Style::default()
-                .fg(theme.text)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
         ),
         (Role::Assistant, false) => (
             "Filevo",
-            theme.glyph("❯", ">"),
+            theme.glyph("◈", "*"),
             Style::default()
                 .fg(theme.primary)
                 .add_modifier(Modifier::BOLD),
@@ -122,13 +158,11 @@ fn push_message(
         (Role::Assistant, true) => (
             "Filevo",
             "!",
-            Style::default()
-                .fg(theme.red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.red).add_modifier(Modifier::BOLD),
         ),
         (Role::System, _) => (
             "System",
-            theme.glyph("◈", "*"),
+            theme.glyph("⚙", "*"),
             Style::default()
                 .fg(theme.amber)
                 .add_modifier(Modifier::BOLD),
@@ -162,7 +196,8 @@ fn push_message(
     }
     lines.push(Line::from(header));
 
-    let body_width = inner_width.saturating_sub(body_gutter).max(8);
+    let body_indent = 4;
+    let body_width = inner_width.saturating_sub(body_indent + 1).max(10);
     let body_style = if message.is_error {
         Style::default().fg(theme.red)
     } else if message.role == Role::System {
@@ -170,28 +205,19 @@ fn push_message(
     } else {
         Style::default().fg(theme.text)
     };
+
     let body = wrap(&message.content, body_width);
-    let show_owl = message.role == Role::Assistant && body_gutter > 2;
-    for (row, text) in body.iter().enumerate() {
+    for row in 0..body.len() {
+        let text = body.get(row).map(|s| s.as_str()).unwrap_or("");
         let mut spans: Vec<Span<'static>> = Vec::new();
-        if show_owl && row < OWL.len() {
-            spans.push(Span::styled(
-                format!(" {}", OWL[row]),
-                Style::default()
-                    .fg(theme.primary)
-                    .add_modifier(Modifier::DIM),
-            ));
-            let owl_used = 1 + owl_width();
-            if body_gutter > owl_used {
-                spans.push(Span::raw(spaces(body_gutter - owl_used)));
-            }
+        if message.role == Role::Assistant {
+            spans.push(Span::styled("  │ ", Style::default().fg(theme.border_focus)));
         } else {
-            spans.push(Span::raw(spaces(body_gutter)));
+            spans.push(Span::raw(spaces(body_indent)));
         }
-        spans.push(Span::styled(
-            truncate(text, body_width),
-            body_style,
-        ));
+        if !text.is_empty() {
+            spans.push(Span::styled(truncate(text, body_width), body_style));
+        }
         lines.push(Line::from(spans));
     }
 }

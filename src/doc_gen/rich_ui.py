@@ -41,29 +41,22 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
-# Tokyo Night / Antigravity Dark Palette
+# Polished Dark Palette (Nordic Slate & Frosted Sapphire, Zero Neon)
 FILEVO_THEME = Theme({
-    "border": "#2ac3de",
-    "border.dim": "#414868",
-    "cyan.bright": "#7aa2f7",
-    "cyan.accent": "#2ac3de",
-    "teal": "#73daca",
-    "amber": "#e0af68",
-    "green": "#9ece6a",
-    "red": "#f7768e",
-    "slate": "#565f89",
-    "dark": "#1a1b26",
-    "white": "#c0caf5",
+    "border": "#4c566a",
+    "border.dim": "#3b4252",
+    "cyan.bright": "#88aece",
+    "cyan.accent": "#81a1c1",
+    "teal": "#8fbcbb",
+    "amber": "#ebcb8b",
+    "green": "#a3be8c",
+    "red": "#bf616a",
+    "slate": "#4c566a",
+    "dark": "#0f1116",
+    "white": "#e5e9f0",
 })
 
 console = Console(theme=FILEVO_THEME)
-
-OWL_AVATAR = [
-    " , _ , ",
-    "(o,o) ",
-    "/ ' \" \\",
-    " -\"-\"- ",
-]
 
 ASCII_BANNER = r"""  _  _  _       _____ ___ _     _______     __ ___        _  _  _  
 /       \      |  ___|_ _| |   | ____\ \   / // _ \     /       \ 
@@ -78,6 +71,7 @@ class AntigravityRichUI:
     def __init__(self, is_interactive: bool = True):
         self.console = console
         self.is_interactive = is_interactive and sys.stdout.isatty()
+        self.owl_printed = False
 
     @contextmanager
     def spinner(self, status_text: str = "Thinking..."):
@@ -187,6 +181,7 @@ class AntigravityRichUI:
         # Display the most recent turns that fit
         display_turns = turns[-6:]
 
+        owl_shown = False
         for turn in display_turns:
             role = turn.get("role", "user")
             content = turn.get("content", "").strip()
@@ -203,53 +198,44 @@ class AntigravityRichUI:
                 elements.append(t)
                 elements.append(Text(""))  # spacer
             else:
-                # Assistant with Owl avatar beside text
-                lines = content.split("\n")
-                body_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-                body_table.add_column("Avatar", width=8, style="bold #2ac3de")
-                body_table.add_column("Text", ratio=1)
-
-                avatar_lines = list(OWL_AVATAR)
-                max_lines = max(len(avatar_lines), len(lines))
-
-                for li in range(max_lines):
-                    av = avatar_lines[li] if li < len(avatar_lines) else "       "
-                    txt = lines[li] if li < len(lines) else ""
-                    body_table.add_row(av, f"[white]{txt}[/white]")
-
-                t.add_row(">", "Filevo", body_table, ts)
+                # Assistant message with clean accent
+                t.add_row("◈", "Filevo", f"[white]{content}[/white]", ts)
                 elements.append(t)
                 elements.append(Text(""))  # spacer
 
         return Panel(
             Group(*elements),
             box=ROUNDED,
-            border_style="#2ac3de",
+            border_style="#4c566a",
             padding=(0, 1),
         )
 
     def build_decision_panel(self, decision_info: dict[str, Any]) -> Panel:
         """Right sidebar RLCD Decision telemetry panel with probability bars."""
-        probs = decision_info.get("probabilities", {
-            "DOCUMENT_CREATION": 0.12,
-            "CONVERSATION": 0.71,
-            "DOCUMENT_ANALYSIS": 0.08,
-            "KNOWLEDGE_INDEXING": 0.05,
-            "POLICY_TRAIN": 0.04,
-        })
-        conf = decision_info.get("confidence", 0.713)
-        entropy = decision_info.get("entropy", 0.58)
-        risk = decision_info.get("risk", "LOW")
+        probs = decision_info.get("probabilities")
+        if not probs:
+            from src.doc_gen.rlcd_engine import RLCDDecisionEngine
+            engine = RLCDDecisionEngine()
+            eval_res = engine.evaluate_intent("Technical report on microservices")
+            probs = eval_res.get("probabilities", {})
+            conf = eval_res.get("confidence", 0.0)
+            entropy = eval_res.get("entropy", 0.0)
+            risk = eval_res.get("risk", "LOW")
+        else:
+            conf = decision_info.get("confidence", 0.0)
+            entropy = decision_info.get("entropy", 0.0)
+            risk = decision_info.get("risk", "LOW")
 
         t = Table(show_header=False, box=None, padding=(0, 0), expand=True)
         t.add_column("Intent", style="bold #2ac3de", width=20)
         t.add_column("Bar", ratio=1)
         t.add_column("Val", style="bold white", width=6, justify="right")
 
+        max_prob = max(probs.values()) if probs else 1.0
         for intent, prob in probs.items():
             bar_len = int(prob * 14)
             bar = "█" * bar_len + "░" * (14 - bar_len)
-            style = "bold #2ac3de" if prob == max(probs.values()) else "#414868"
+            style = "bold #2ac3de" if prob == max_prob else "#414868"
             t.add_row(intent, f"[{style}]{bar}[/{style}]", f"{prob:.2f}")
 
         t.add_row("", "", "")
@@ -291,18 +277,15 @@ class AntigravityRichUI:
         t.add_column("Icon", width=3, style="#73daca")
         t.add_column("Title", ratio=1)
 
-        display_refs = references[:4] if references else [
-            {"title": "Understanding Overfitting in Machine Learning", "domain": "towardsdatascience.com"},
-            {"title": "Overfitting vs. Generalization in Deep Architectures", "domain": "machinelearningmastery.com"},
-            {"title": "Bias-Variance Tradeoff and Regularization", "domain": "cs231n.github.io"},
-            {"title": "Why Neural Models Overfit Training Sets", "domain": "keras.io"},
-        ]
-
-        for i, ref in enumerate(display_refs, 1):
-            title = ref.get("title", "")
-            domain = ref.get("domain", "")
-            snippet = f"[bold white]{title}[/bold white]\n[dim]{domain}[/dim]"
-            t.add_row(str(i), "🌐", snippet)
+        valid_refs = [r for r in (references or []) if isinstance(r, dict) and (r.get("title") or r.get("url"))]
+        if not valid_refs:
+            t.add_row("", "", "[dim]No live references\nUse /research <topic> to ground sources.[/dim]")
+        else:
+            for i, ref in enumerate(valid_refs[:4], 1):
+                title = ref.get("title", "")
+                domain = ref.get("domain", "")
+                snippet = f"[bold white]{title}[/bold white]\n[dim]{domain}[/dim]"
+                t.add_row(str(i), "🌐", snippet)
 
         return Panel(
             t,
@@ -322,7 +305,7 @@ class AntigravityRichUI:
         t.add_column("Size", width=10, style="#73daca", justify="right")
         t.add_column("Date", width=18, style="dim #565f89", justify="right")
 
-        doc_list = docs or []
+        doc_list = list(docs) if docs else []
         if not doc_list:
             output_dir = Path.home() / ".filevo" / "output"
             if output_dir.exists():
@@ -334,14 +317,10 @@ class AntigravityRichUI:
                     doc_list.append({"name": f.name, "size": size_str, "date": mtime_str})
 
         if not doc_list:
-            doc_list = [
-                {"name": "IoT_Cricket_Scoring_System.docx", "size": "2.4 MB", "date": "2025-08-17 10:12"},
-                {"name": "University_Permission_Letter.docx", "size": "150 KB", "date": "2025-08-17 09:48"},
-                {"name": "Edge_Computing_Report.docx", "size": "1.8 MB", "date": "2025-08-17 09:21"},
-            ]
-
-        for i, d in enumerate(doc_list[:3], 1):
-            t.add_row("📄", f"{i}.", d["name"], d["size"], d["date"])
+            t.add_row("", "", "[dim]No documents created yet[/dim]", "", "")
+        else:
+            for i, d in enumerate(doc_list[:3], 1):
+                t.add_row("📄", f"{i}.", d["name"], d.get("size", ""), d.get("date", ""))
 
         return Panel(
             t,
@@ -354,13 +333,90 @@ class AntigravityRichUI:
 
     def build_system_status_panel(
         self,
-        model_pct: int = 100,
-        gpu_pct: int = 72,
-        web_search: str = "Online",
-        disk_usage: str = "2.1 GB / 50 GB",
-        memory_str: str = "8/20",
+        model_pct: int | None = None,
+        gpu_pct: int | None = None,
+        web_search: str | None = None,
+        disk_usage: str | None = None,
+        memory_str: str | None = None,
     ) -> Panel:
-        """Bottom right System Status panel with gauge bars."""
+        """Bottom right System Status panel with dynamically queried hardware gauges."""
+        import subprocess
+
+        # 1. GPU
+        gpu_name = "GPU"
+        if gpu_pct is None:
+            gpu_pct = 0
+            try:
+                probe = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name,utilization.gpu", "--format=csv,noheader,nounits"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.5,
+                    check=False,
+                )
+                line = next((ln for ln in probe.stdout.splitlines() if ln.strip()), "")
+                if probe.returncode == 0 and line:
+                    parts = [p.strip() for p in line.split(",")]
+                    gpu_name = parts[0]
+                    gpu_pct = int(float(parts[1]))
+            except Exception:
+                gpu_pct = 0
+
+        # Shorten GPU name for display
+        if "4090" in gpu_name:
+            gpu_label = "GPU (RTX 4090)"
+        elif gpu_name != "GPU":
+            gpu_label = f"GPU ({gpu_name[:12]})"
+        else:
+            gpu_label = "GPU"
+
+        # 2. Disk
+        if disk_usage is None:
+            try:
+                usage = shutil.disk_usage(str(Path.home()))
+                used_gb = usage.used / (1024**3)
+                total_gb = usage.total / (1024**3)
+                disk_usage = f"{used_gb:.1f} GB / {int(total_gb)} GB"
+                disk_frac = min(1.0, usage.used / usage.total)
+            except Exception:
+                disk_usage = "N/A"
+                disk_frac = 0.0
+        else:
+            disk_frac = 0.05
+
+        # 3. Memory
+        if memory_str is None:
+            mem_frac = 0.0
+            try:
+                meminfo = {}
+                with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                    for line in f:
+                        k, _, r = line.partition(":")
+                        parts = r.strip().split()
+                        if parts:
+                            meminfo[k] = int(parts[0]) * 1024
+                tot = meminfo.get("MemTotal", 0)
+                avail = meminfo.get("MemAvailable", 0)
+                if tot > 0:
+                    used = tot - avail
+                    mem_frac = min(1.0, used / tot)
+                    memory_str = f"{used / (1024**3):.1f} / {tot / (1024**3):.0f} GB"
+                else:
+                    memory_str = "N/A"
+            except Exception:
+                memory_str = "N/A"
+        else:
+            mem_frac = 0.4
+
+        # 4. Model
+        if model_pct is None:
+            model_pct = 100
+
+        # 5. Web
+        if web_search is None:
+            web_enabled = os.environ.get("FILEVO_WEB_DISABLED") != "1"
+            web_search = "Online" if web_enabled else "Disabled"
+
         t = Table(show_header=False, box=None, padding=(0, 1), expand=True)
         t.add_column("Icon", width=3, style="bold #2ac3de")
         t.add_column("Subsystem", width=12, style="bold white")
@@ -368,19 +424,22 @@ class AntigravityRichUI:
         t.add_column("Stat", width=8, style="bold white")
 
         t.add_column("Icon2", width=3, style="bold #2ac3de")
-        t.add_column("Subsystem2", width=14, style="bold white")
+        t.add_column("Subsystem2", width=16, style="bold white")
         t.add_column("Bar2", width=14)
-        t.add_column("Stat2", width=14, style="bold white")
+        t.add_column("Stat2", width=16, style="bold white")
 
-        bar_model = "█" * 10
-        bar_gpu = "█" * 7 + "░" * 3
-        bar_web = "█" * 10
-        bar_disk = "█" * 2 + "░" * 8
-        bar_mem = "█" * 4 + "░" * 6
+        bar_model = "█" * (model_pct // 10) + "░" * (10 - model_pct // 10)
+        gpu_units = min(10, int(gpu_pct / 10))
+        bar_gpu = "█" * gpu_units + "░" * (10 - gpu_units)
+        bar_web = "█" * 10 if web_search == "Online" else "░" * 10
+        disk_units = min(10, int(disk_frac * 10))
+        bar_disk = "█" * disk_units + "░" * (10 - disk_units)
+        mem_units = min(10, int(mem_frac * 10))
+        bar_mem = "█" * mem_units + "░" * (10 - mem_units)
 
         t.add_row(
             "⚙", "Model", f"[bold #2ac3de]{bar_model}[/bold #2ac3de]", f"{model_pct}%",
-            "💻", "GPU (RTX 4090)", f"[bold #2ac3de]{bar_gpu}[/bold #2ac3de]", f"{gpu_pct}%",
+            "💻", gpu_label, f"[bold #2ac3de]{bar_gpu}[/bold #2ac3de]", f"{gpu_pct}%",
         )
         t.add_row(
             "🌐", "Web Search", f"[bold #9ece6a]{bar_web}[/bold #9ece6a]", web_search,
@@ -525,23 +584,48 @@ class AntigravityRichUI:
         # Prompt area
         self.render_bottom_prompt_box()
 
-    def display_document_card(self, doc_path: Path, title: str, sections_count: int, archetype: str):
-        """Display success card for created DOCX document."""
+    def display_document_card(
+        self,
+        doc_path: Path,
+        title: str,
+        sections_count: int,
+        archetype: str,
+        wc_result: Any | None = None,
+    ):
+        """Display success card for created DOCX document with optional WordCraft telemetry."""
         t = Table(show_header=False, box=None, padding=(0, 1))
-        t.add_column("Key", style="bold #2ac3de", width=18)
+        t.add_column("Key", style="bold #2ac3de", width=20)
         t.add_column("Val", style="white")
 
         size_kb = doc_path.stat().st_size / 1024
         t.add_row("Document Title", f"[bold white]{title}[/bold white]")
         t.add_row("Archetype", f"[bold #7aa2f7]{archetype}[/bold #7aa2f7]")
-        t.add_row("Output File", f"[cyan]{doc_path}[/cyan]")
+        t.add_row("Output DOCX", f"[cyan]{doc_path}[/cyan]")
+        if wc_result and getattr(wc_result, "pdf_path", None):
+            t.add_row("Exported PDF", f"[magenta]{wc_result.pdf_path}[/magenta]")
+        if wc_result and getattr(wc_result, "preview_image_path", None):
+            t.add_row("Visual Preview", f"[yellow]{wc_result.preview_image_path}[/yellow]")
+        if wc_result and getattr(wc_result, "doc_md_path", None):
+            t.add_row("Anti-Slop Spec", f"[blue]{wc_result.doc_md_path}[/blue]")
         t.add_row("File Size", f"{size_kb:.1f} KB")
         t.add_row("Sections Rendered", str(sections_count))
+        if wc_result:
+            words = getattr(wc_result, "words", 0)
+            pages = getattr(wc_result, "pages", 1)
+            blocks = getattr(wc_result, "blocks", 0)
+            tables = getattr(wc_result, "tables_count", 0)
+            t.add_row("Word Count", f"{words} words across {pages} page(s)")
+            t.add_row("Blocks & Tables", f"{blocks} blocks, {tables} structured table(s)")
+            mode_str = "Visible Desktop Application (Live)" if getattr(wc_result, "visible_mode", False) else "Headless MCP Server"
+            t.add_row("Authoring Engine", f"[bold #bb9af7]WordCraft MCP[/bold #bb9af7] ({mode_str})")
+        else:
+            t.add_row("Authoring Engine", "[bold #7aa2f7]Filevo Native OpenXML Renderer[/bold #7aa2f7]")
         t.add_row("OpenXML Validation", "[bold #9ece6a]✓ 100% Pass (Healthy Container)[/bold #9ece6a]")
 
+        engine_title = "WordCraft MCP Live Processor" if (wc_result and getattr(wc_result, "visible_mode", False)) else ("WordCraft MCP Engine" if wc_result else "Native OpenXML")
         panel = Panel(
             t,
-            title="[bold #9ece6a]✓ Microsoft Word (.docx) Created & Validated[/bold #9ece6a]",
+            title=f"[bold #9ece6a]✓ Microsoft Word (.docx) Created & Validated via {engine_title}[/bold #9ece6a]",
             title_align="left",
             box=ROUNDED,
             border_style="#9ece6a",
@@ -565,27 +649,14 @@ class AntigravityRichUI:
         self.console.print()
 
     def print_assistant_message(self, text: str):
-        """Print assistant response with owl avatar and timestamp."""
+        """Print assistant response with clean accent and timestamp."""
         ts = datetime.datetime.now().strftime("%H:%M:%S")
-        lines = text.strip().split("\n")
-        body_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-        body_table.add_column("Avatar", width=8, style="bold #2ac3de")
-        body_table.add_column("Text", ratio=1)
-
-        avatar_lines = list(OWL_AVATAR)
-        max_lines = max(len(avatar_lines), len(lines))
-
-        for li in range(max_lines):
-            av = avatar_lines[li] if li < len(avatar_lines) else "       "
-            txt = lines[li] if li < len(lines) else ""
-            body_table.add_row(av, f"[white]{txt}[/white]")
-
         t = Table(show_header=False, box=None, padding=(0, 0), expand=True)
-        t.add_column("Prefix", width=3, style="bold #2ac3de")
+        t.add_column("Prefix", width=3, style="bold #88aece")
         t.add_column("Author", width=9, style="bold white")
         t.add_column("Body", ratio=1)
-        t.add_column("Time", width=10, style="dim #565f89", justify="right")
-        t.add_row(">", "Filevo", body_table, ts)
+        t.add_column("Time", width=10, style="dim #4c566a", justify="right")
+        t.add_row("◈", "Filevo", f"[white]{text.strip()}[/white]", ts)
 
         self.console.print()
         self.console.print(t)

@@ -5,11 +5,11 @@ use crate::app::{App, Focus};
 use crate::model::{format_epoch_document, format_size};
 use crate::ui::text::{spaces, truncate, width};
 use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
+use ratatui::widgets::Paragraph;
 
 fn push_row(
     lines: &mut Vec<Line<'static>>,
@@ -30,15 +30,9 @@ fn push_row(
     if show_size {
         reserved += size_width + 1;
     }
-    let prefix = format!(
-        " {} {:>2}. ",
-        theme.glyph("▤", "D"),
-        index + 1
-    );
+    let prefix = format!(" {} {:>2}. ", theme.glyph("▤", "D"), index + 1);
     let prefix_width = width(&prefix);
-    let name_width = inner_width
-        .saturating_sub(prefix_width + reserved)
-        .max(8);
+    let name_width = inner_width.saturating_sub(prefix_width + reserved).max(8);
     let name = truncate(&document.name, name_width);
     let row_bg = if selected {
         Style::default().bg(theme.selection_bg)
@@ -49,8 +43,16 @@ fn push_row(
         Span::styled(
             prefix,
             Style::default()
-                .fg(if selected { theme.primary } else { theme.secondary })
-                .bg(if selected { theme.selection_bg } else { theme.panel_bg }),
+                .fg(if selected {
+                    theme.primary
+                } else {
+                    theme.secondary
+                })
+                .bg(if selected {
+                    theme.selection_bg
+                } else {
+                    theme.panel_bg
+                }),
         ),
         Span::styled(
             name.clone(),
@@ -66,16 +68,17 @@ fn push_row(
     if show_size {
         spans.push(Span::styled(spaces(gap + 1), row_bg));
         spans.push(Span::styled(
-            format!("{:>size_width$}", format_size(document.size_bytes)),
+            format!(
+                "{:>width$}",
+                format_size(document.size_bytes),
+                width = size_width
+            ),
             row_bg.fg(theme.text_dim),
         ));
         gap = 0;
     }
     if show_date {
-        spans.push(Span::styled(
-            spaces(gap + 2),
-            row_bg,
-        ));
+        spans.push(Span::styled(spaces(gap + 2), row_bg));
         spans.push(Span::styled(
             format_epoch_document(document.modified),
             row_bg.fg(theme.muted),

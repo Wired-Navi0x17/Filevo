@@ -25,10 +25,41 @@ pub fn wrap(text: &str, max_width: usize) -> Vec<String> {
     lines
 }
 
+fn is_table_or_art_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('┏')
+        || trimmed.starts_with('┃')
+        || trimmed.starts_with('┡')
+        || trimmed.starts_with('┢')
+        || trimmed.starts_with('┩')
+        || trimmed.starts_with('└')
+        || trimmed.starts_with('│')
+        || trimmed.starts_with('┌')
+        || trimmed.starts_with('├')
+        || trimmed.starts_with('|')
+        || trimmed.starts_with('+')
+        || line.contains('┃')
+        || line.contains('│')
+        || line.contains('┏')
+        || line.contains('━')
+        || line.contains('─')
+        || line.contains('└')
+        || line.contains('┌')
+}
+
 fn wrap_line(raw: &str, max_width: usize, out: &mut Vec<String>) {
     let line = raw.trim_end();
     if line.is_empty() {
         out.push(String::new());
+        return;
+    }
+
+    if is_table_or_art_line(line) {
+        if width(line) <= max_width {
+            out.push(line.to_string());
+        } else {
+            out.push(truncate(line, max_width));
+        }
         return;
     }
 

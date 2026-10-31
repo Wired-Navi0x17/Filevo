@@ -8,10 +8,10 @@
 
 use crate::model::{
     Dashboard, Decision, DiskInfo, DocumentInfo, GpuInfo, ModelInfo, PolicyTelemetry,
-    ReferenceInfo, Risk, SessionInfo, SystemMemory, Telemetry, TurnSnapshot, WebStatus, Role,
+    ReferenceInfo, Role, SessionInfo, SystemMemory, Telemetry, TurnSnapshot, WebStatus,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -167,7 +167,7 @@ fn handle_request(request: Request) -> Event {
                             }
                         }
                         "analysis" => "The Python engine routed this request to document analysis. Use /analyze <path> to see the full report in this view.".to_string(),
-                        "indexing" => "The Python engine routed this request to knowledge indexing. Use /index [path] to see the full report in this view.".to_string(),
+                        "indexing" => "The Python engine routed this request to knowledge indexing. Use /train [path] to see the full report in this view.".to_string(),
                         other => format!(
                             "Backend returned an unsupported response type: {other}"
                         ),
@@ -210,7 +210,10 @@ fn handle_request(request: Request) -> Event {
                     if let Some(message) = daemon_error(&value) {
                         Event::Error { task_id, message }
                     } else {
-                        Event::DaemonResult { task_id, payload: value }
+                        Event::DaemonResult {
+                            task_id,
+                            payload: value,
+                        }
                     }
                 }
                 Err(RequestError::Cancelled) => Event::Cancelled { task_id },
@@ -266,8 +269,12 @@ fn handle_error(error: RequestError) -> String {
 
 fn fetch_dashboard() -> Result<Dashboard, String> {
     let cancel = AtomicBool::new(false);
-    let value = daemon_request(&json!({"action": "dashboard"}), &cancel, Some(Duration::from_secs(45)))
-        .map_err(handle_error)?;
+    let value = daemon_request(
+        &json!({"action": "dashboard"}),
+        &cancel,
+        Some(Duration::from_secs(45)),
+    )
+    .map_err(handle_error)?;
     if let Some(message) = daemon_error(&value) {
         return Err(message);
     }
@@ -300,6 +307,7 @@ fn run_python_capture(
     let mut command = Command::new(&python);
     command
         .args(&command_args)
+        .current_dir(workspace_root())
         .env("FILEVO_BOOTSTRAPPED", "1")
         .env("LD_LIBRARY_PATH", nix_library_path())
         .env("NO_COLOR", "1")
@@ -310,7 +318,8 @@ fn run_python_capture(
 
     let mut child = command.spawn().map_err(|e| {
         RequestError::Message(format!(
-            "could not start the Python backend ({python}): {e}"
+            "could not start the Python backend ({}): {e}",
+            python.display()
         ))
     })?;
 
@@ -336,7 +345,10 @@ fn run_python_capture(
     Ok((cleaned, success))
 }
 
-fn wait_for_child(child: &mut Child, cancel: &AtomicBool) -> Result<Option<std::process::ExitStatus>, RequestError> {
+fn wait_for_child(
+    child: &mut Child,
+    cancel: &AtomicBool,
+) -> Result<Option<std::process::ExitStatus>, RequestError> {
     loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
@@ -472,6 +484,29 @@ fn python_launcher() -> (PathBuf, Vec<String>) {
     (python, vec![script.to_string_lossy().to_string()])
 }
 
+/// Run the existing Python CLI with inherited stdio for the one-shot command
+/// modes (`filevo-cli status`, `filevo-cli create …`, …).  The interactive TUI
+/// uses the daemon instead so the UI never blocks.
+pub fn run_python_inherit(args: &[String]) -> Result<i32, String> {
+    let (python, mut command_args) = python_launcher();
+    command_args.extend(args.iter().cloned());
+    let status = Command::new(&python)
+        .args(&command_args)
+        .env("FILEVO_BOOTSTRAPPED", "1")
+        .env("LD_LIBRARY_PATH", nix_library_path())
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| {
+            format!(
+                "could not start the Python backend ({}): {error}",
+                python.display()
+            )
+        })?;
+    Ok(status.code().unwrap_or(1))
+}
+
 fn daemon_launcher() -> (PathBuf, Vec<String>) {
     let root = workspace_root();
     let venv_python = root.join(".venv").join("bin").join("python3");
@@ -603,7 +638,8 @@ fn ensure_daemon(cancel: &AtomicBool) -> Result<UnixStream, RequestError> {
 
     let mut child = command.spawn().map_err(|e| {
         RequestError::Message(format!(
-            "could not start the Filevo daemon ({python}): {e}"
+            "could not start the Filevo daemon ({}): {e}",
+            python.display()
         ))
     })?;
 
@@ -705,7 +741,9 @@ fn ping(stream: &mut UnixStream) -> Result<u32, String> {
             Err(error)
                 if matches!(
                     error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
                 ) =>
             {
                 continue;
@@ -715,6 +753,34 @@ fn ping(stream: &mut UnixStream) -> Result<u32, String> {
     }
     let value: Value =
         serde_json::from_slice(&raw).map_err(|e| format!("invalid daemon ping response: {e}"))?;
+
+    // Check daemon freshness against workspace python source files
+    if let Some(started_at) = value.get("started_at").and_then(Value::as_f64) {
+        let root = workspace_root();
+        let doc_gen_dir = root.join("src").join("doc_gen");
+        if let Ok(entries) = fs::read_dir(&doc_gen_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("py") {
+                    if let Ok(meta) = path.metadata() {
+                        if let Ok(mtime) = meta.modified() {
+                            let mtime_secs = mtime
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs_f64())
+                                .unwrap_or(0.0);
+                            if mtime_secs > started_at + 1.0 {
+                                return Err(format!(
+                                    "daemon was started before {} was modified; restarting",
+                                    path.display()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     value
         .get("protocol")
         .and_then(Value::as_u64)
@@ -775,7 +841,9 @@ fn daemon_request(
             Err(error)
                 if matches!(
                     error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
                 ) =>
             {
                 continue;
@@ -789,9 +857,8 @@ fn daemon_request(
     }
 
     let first_line = raw.split(|byte| *byte == b'\n').next().unwrap_or(&[]);
-    serde_json::from_slice(first_line).map_err(|e| {
-        RequestError::Message(format!("invalid JSON from Filevo daemon: {e}"))
-    })
+    serde_json::from_slice(first_line)
+        .map_err(|e| RequestError::Message(format!("invalid JSON from Filevo daemon: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,7 +1088,8 @@ fn parse_dashboard(value: Value) -> Result<Dashboard, String> {
         })
         .collect();
 
-    let mut archetypes: Vec<(String, f64)> = raw.policy.archetype_distribution.into_iter().collect();
+    let mut archetypes: Vec<(String, f64)> =
+        raw.policy.archetype_distribution.into_iter().collect();
     archetypes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let mut fonts: Vec<(String, f64)> = raw.policy.font_distribution.into_iter().collect();
     fonts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1192,6 +1260,7 @@ fn parse_chat_decision(value: Option<&Value>) -> Option<Decision> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Risk;
 
     #[test]
     fn ansi_stripping_handles_colour_and_osc() {

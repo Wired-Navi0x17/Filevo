@@ -20,7 +20,7 @@ class TrainingMetrics:
     """Metrics recorded during a training run."""
     epochs: int
     train_loss: float
-    eval_loss: float
+    eval_loss: float | None
     steps_completed: int
     samples_trained: int
     eval_samples: int
@@ -146,13 +146,16 @@ class FilevoModelTrainer:
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
             comp_ids = tokenizer.encode(completion, add_special_tokens=False)
 
+            max_ctx = 1024
+            if len(prompt_ids) + len(comp_ids) > max_ctx:
+                # Truncate prompt from the left so completion targets are never dropped
+                budget_for_prompt = max(0, max_ctx - len(comp_ids))
+                prompt_ids = prompt_ids[-budget_for_prompt:] if budget_for_prompt > 0 else []
+                comp_ids = comp_ids[:max_ctx]
+
             input_ids = prompt_ids + comp_ids
             # Mask prompt tokens with -100 so loss is computed solely on the assistant response
             labels = [-100] * len(prompt_ids) + comp_ids
-
-            if len(input_ids) > 1024:
-                input_ids = input_ids[:1024]
-                labels = labels[:1024]
 
             processed_train.append((input_ids, labels))
 
@@ -202,16 +205,18 @@ class FilevoModelTrainer:
                 prompt, completion = self.format_sample(rec)
                 p_ids = tokenizer.encode(prompt, add_special_tokens=False)
                 c_ids = tokenizer.encode(completion, add_special_tokens=False)
+                max_ctx = 1024
+                if len(p_ids) + len(c_ids) > max_ctx:
+                    budget_for_prompt = max(0, max_ctx - len(c_ids))
+                    p_ids = p_ids[-budget_for_prompt:] if budget_for_prompt > 0 else []
+                    c_ids = c_ids[:max_ctx]
                 inp = torch.tensor([p_ids + c_ids], dtype=torch.long, device=model.device)
                 lbl = torch.tensor([[-100] * len(p_ids) + c_ids], dtype=torch.long, device=model.device)
-                if inp.size(1) > 1024:
-                    inp = inp[:, :1024]
-                    lbl = lbl[:, :1024]
                 out = model(input_ids=inp, labels=lbl)
                 eval_loss += out.loss.item()
                 eval_steps += 1
 
-        avg_eval_loss = eval_loss / max(eval_steps, 1) if eval_steps > 0 else avg_train_loss
+        avg_eval_loss = (eval_loss / eval_steps) if eval_steps > 0 else None
 
         # Save adapted weights and tokenizer
         model.save_pretrained(self.output_dir)
@@ -221,7 +226,7 @@ class FilevoModelTrainer:
         metrics = TrainingMetrics(
             epochs=self.epochs,
             train_loss=round(avg_train_loss, 4),
-            eval_loss=round(avg_eval_loss, 4),
+            eval_loss=round(avg_eval_loss, 4) if avg_eval_loss is not None else None,
             steps_completed=total_steps,
             samples_trained=len(train_records),
             eval_samples=len(eval_records),

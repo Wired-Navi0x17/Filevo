@@ -31,7 +31,12 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn new(id: u64, role: Role, content: impl Into<String>, timestamp: impl Into<String>) -> Self {
+    pub fn new(
+        id: u64,
+        role: Role,
+        content: impl Into<String>,
+        timestamp: impl Into<String>,
+    ) -> Self {
         Self {
             id,
             role,
@@ -41,11 +46,7 @@ impl Message {
         }
     }
 
-    pub fn error(
-        id: u64,
-        content: impl Into<String>,
-        timestamp: impl Into<String>,
-    ) -> Self {
+    pub fn error(id: u64, content: impl Into<String>, timestamp: impl Into<String>) -> Self {
         Self {
             id,
             role: Role::Assistant,
@@ -352,18 +353,19 @@ pub struct TurnSnapshot {
     pub timestamp: f64,
 }
 
-/// Human-readable binary size (base 1024) used by the documents table.
+/// Human-readable size using decimal units (the same convention as the
+/// reference interface) so a 2,400,000-byte document reads "2.4 MB".
 pub fn format_size(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = 1024.0 * 1024.0;
-    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const KB: f64 = 1_000.0;
+    const MB: f64 = 1_000_000.0;
+    const GB: f64 = 1_000_000_000.0;
     let value = bytes as f64;
-    if value >= GIB {
-        format!("{:.1} GB", value / GIB)
-    } else if value >= MIB {
-        format!("{:.1} MB", value / MIB)
-    } else if value >= KIB {
-        format!("{:.0} KB", value / KIB)
+    if value >= GB {
+        format!("{:.1} GB", value / GB)
+    } else if value >= MB {
+        format!("{:.1} MB", value / MB)
+    } else if value >= KB {
+        format!("{:.0} KB", value / KB)
     } else {
         format!("{bytes} B")
     }
@@ -455,7 +457,8 @@ mod tests {
 
     #[test]
     fn sizes_are_human_readable() {
-        assert_eq!(format_size(150 * 1024), "150 KB");
-        assert_eq!(format_size(2_500_000), "2.4 MB");
+        assert_eq!(format_size(150 * 1000), "150 KB");
+        assert_eq!(format_size(2_400_000), "2.4 MB");
+        assert_eq!(format_size(2_100_000_000), "2.1 GB");
     }
 }

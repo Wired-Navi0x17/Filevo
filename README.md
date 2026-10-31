@@ -25,7 +25,7 @@ Built entirely on Python standard libraries (`zipfile`, `xml.etree.ElementTree`,
 ## Key Capabilities
 
 * **Conversational Terminal Chat**: Responds naturally to questions and queries, with built-in readline history and tab completion.
-* **Unified Intent Routing**: Natural language requests (`"create a docx on AI"`, `"index my documents"`, `"show status"`) invoke the exact same underlying logic as explicit slash commands (`/create`, `/index`, `/status`).
+* **Unified Intent Routing**: Natural language requests (`"create a docx on AI"`, `"train policy on my docs"`, `"show status"`) invoke the exact same underlying logic as explicit slash commands (`/create`, `/train`, `/status`).
 * **`@file` Attachment Mentions**: Reference any file in your queries using `@path/to/file` (e.g. `@report.docx what is in this document?`). Filevo extracts the outline, headings, and metrics to ground the conversation.
 * **Persistent Document Knowledge Base**: Incrementally hashes files using SHA-256. Unchanged documents are skipped instantly without reprocessing.
 * **Generalization without Overfitting**: Learns document archetypes, section progressions, heading hierarchies, and typography conventions rather than memorizing literal text.
@@ -73,8 +73,7 @@ report-train 10
 | `/help` | `"help"`, `"what can you do?"` | Displays available commands and usage guide |
 | `/create <topic>` | `"create a docx on <topic>"` | Synthesizes a calibrated DOCX file via RLCD |
 | `/analyze <path>` | `"analyze <path>"`, `"inspect <path>"` | Inspects a document or codebase structure |
-| `/index [path]` | `"index documents in <path>"` | Incrementally indexes DOCX files into the persistent metadata cache |
-| `/train [args]` | `"train model"`, `"train live 10"` | Adapts policy on the indexed corpus or runs live training |
+| `/train [@file\|dir\|live]` | `"train on @doc.docx"`, `"train live 10"` | Unified 3-in-1 pipeline: ingests documents, compiles supervision datasets & adapts policy gradients |
 | `/feedback <score>` | `"feedback +1.0"`, `"rate -0.5"` | Records human feedback on the last generation |
 | `/model` | `"model"`, `"show weights"` | Reports calibrated policy probabilities and typography preferences |
 | `/status` | `"status"`, `"system status"` | Reports indexed document counts and RLCD metrics |
@@ -98,7 +97,7 @@ flowchart TD
     end
 
     subgraph Knowledge ["Persistent Knowledge Base (~/.filevo/knowledge/)"]
-        IndexCmd[/index or NL 'index docs'] --> DocxParser[OpenXML Feature Extractor]
+        IndexCmd[/train or NL 'train on docs'] --> DocxParser[OpenXML Feature Extractor]
         DocxParser --> CacheCheck{SHA-256 Changed?}
         CacheCheck -->|No| Skip[Skip Unchanged File]
         CacheCheck -->|Yes| FeatureExtractor[Extract Style & Structure]

@@ -152,21 +152,49 @@ class WebResearcher:
                     html,
                     re.DOTALL | re.IGNORECASE,
                 )
-                titles = re.findall(
-                    r'<a class="result__url[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                link_matches = re.findall(
+                    r'<a class="result__a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
                     html,
                     re.DOTALL | re.IGNORECASE,
                 )
 
-                for i, snip in enumerate(snippets[:max_results]):
+                SPAM_PATTERNS = [
+                    "smartcric", "smart cric", "crichd", "crictime", "cricstream",
+                    "live cricket match today online", "watch live cricket streaming",
+                    "watch online for free", "live streaming online free", "buffstream",
+                    "stream2watch", "vipbox", "cricfree", "apk download", "betting odds"
+                ]
+
+                for i, snip in enumerate(snippets[:max_results * 2]):
                     clean_snip = re.sub(r"<[^>]+>", "", snip).strip()
-                    raw_url = titles[i][0] if i < len(titles) else ""
+                    raw_url = link_matches[i][0] if i < len(link_matches) else ""
+                    raw_title = link_matches[i][1] if i < len(link_matches) else ""
+                    clean_title = re.sub(r"<[^>]+>", "", raw_title).strip()
                     if "uddg=" in raw_url:
                         raw_url = urllib.parse.unquote(raw_url.split("uddg=")[-1].split("&")[0])
+                    domain = urllib.parse.urlparse(raw_url).netloc.removeprefix("www.") if raw_url else ""
+                    
+                    # Spam / low-quality filter
+                    test_str = f"{clean_title} {clean_snip} {domain}".lower()
+                    if any(sp in test_str for sp in SPAM_PATTERNS):
+                        continue
+
+                    # Relevance check: require at least one topical keyword from query
+                    query_keywords = [
+                        w.lower() for w in re.findall(r"\w+", query)
+                        if len(w) > 3 and w.lower() not in ("create", "report", "document", "specifying", "technical", "please")
+                    ]
+                    if query_keywords and not any(kw in test_str for kw in query_keywords):
+                        continue
+
                     results.append({
+                        "title": clean_title or domain or "Reference",
                         "snippet": clean_snip,
                         "url": raw_url,
+                        "domain": domain,
                     })
+                    if len(results) >= max_results:
+                        break
             except Exception:
                 pass
         return results
@@ -194,14 +222,23 @@ class WebResearcher:
         if wiki_data:
             overview = wiki_data["extract"]
             if wiki_data.get("url"):
-                sources.append(wiki_data["url"])
+                wiki_domain = urllib.parse.urlparse(wiki_data["url"]).netloc.removeprefix("www.")
+                sources.append({
+                    "title": wiki_data.get("title", topic),
+                    "url": wiki_data["url"],
+                    "domain": wiki_domain,
+                })
 
         combined_snippets = []
         for r in ddg_results:
             if r.get("snippet"):
                 combined_snippets.append(r["snippet"])
-            if r.get("url") and r["url"] not in sources:
-                sources.append(r["url"])
+            if r.get("url"):
+                sources.append({
+                    "title": r.get("title", topic),
+                    "url": r["url"],
+                    "domain": r.get("domain", ""),
+                })
 
         if not overview and combined_snippets:
             overview = " ".join(combined_snippets[:2])

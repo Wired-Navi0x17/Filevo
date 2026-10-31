@@ -5,8 +5,8 @@
 //! `FILEVO_DEMO=1`; the production path always comes from the Python daemon.
 
 use crate::model::{
-    Dashboard, Decision, DiskInfo, DocumentInfo, GpuInfo, Message, ModelInfo, PolicyTelemetry,
-    ReferenceInfo, Risk, Role, SessionInfo, SystemMemory, Telemetry, WebStatus, INTENTS,
+    Dashboard, Decision, DiskInfo, DocumentInfo, GpuInfo, INTENTS, Message, ModelInfo,
+    PolicyTelemetry, ReferenceInfo, Risk, Role, SessionInfo, SystemMemory, Telemetry, WebStatus,
 };
 use chrono::{Local, TimeZone};
 
@@ -58,8 +58,7 @@ pub fn demo_dashboard() -> Dashboard {
                 domain: "towardsdatascience.com".to_string(),
             },
             ReferenceInfo {
-                url: "https://machinelearningmastery.com/overfitting-vs-generalization"
-                    .to_string(),
+                url: "https://machinelearningmastery.com/overfitting-vs-generalization".to_string(),
                 title: "Overfitting vs. Generalization".to_string(),
                 domain: "machinelearningmastery.com".to_string(),
             },
@@ -149,7 +148,7 @@ pub fn demo_messages() -> Vec<Message> {
         Message::new(
             2,
             Role::Assistant,
-            "Hey there! \u{1F44B}\nI'm Filevo — your document intelligence assistant.\nYou can chat naturally or use slash commands like /create, /analyze, or /index.\nWhat would you like to work on today?",
+            "Hey there! \u{1F44B}\nI'm Filevo — your document intelligence assistant.\nYou can chat naturally or use slash commands like /create, /analyze, or /train.\nWhat would you like to work on today?",
             "10:14:24",
         ),
         Message::new(

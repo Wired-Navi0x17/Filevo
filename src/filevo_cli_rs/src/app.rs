@@ -5,16 +5,14 @@
 
 use crate::backend::{Event, Request};
 use crate::fixtures::{demo_dashboard, demo_messages};
-use crate::model::{
-    format_epoch_hms, Dashboard, Decision, Message, Risk, Role, TurnSnapshot, INTENTS,
-};
+use crate::model::{Dashboard, Decision, INTENTS, Message, Risk, Role, format_epoch_hms};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -24,22 +22,20 @@ pub enum NavTab {
     Home,
     Create,
     Analyze,
-    Index,
     Train,
     Model,
-    Status,
+    Settings,
     Help,
 }
 
 impl NavTab {
-    pub const ALL: [NavTab; 8] = [
+    pub const ALL: [NavTab; 7] = [
         NavTab::Home,
         NavTab::Create,
         NavTab::Analyze,
-        NavTab::Index,
         NavTab::Train,
         NavTab::Model,
-        NavTab::Status,
+        NavTab::Settings,
         NavTab::Help,
     ];
 
@@ -48,10 +44,9 @@ impl NavTab {
             Self::Home => "HOME",
             Self::Create => "CREATE",
             Self::Analyze => "ANALYZE",
-            Self::Index => "INDEX",
             Self::Train => "TRAIN",
             Self::Model => "MODEL",
-            Self::Status => "STATUS",
+            Self::Settings => "SETTINGS",
             Self::Help => "HELP",
         }
     }
@@ -71,14 +66,13 @@ pub enum Focus {
     Navigation,
     Conversation,
     Documents,
-    References,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Home,
     Model,
-    Status,
+    Settings,
     Help,
 }
 
@@ -162,7 +156,7 @@ pub enum PendingKind {
     Create,
     Revise,
     ModelView,
-    StatusView,
+    SettingsView,
     ConversationCommand,
 }
 
@@ -208,14 +202,9 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Analyzes a document or codebase",
     },
     CommandSpec {
-        name: "/index",
-        usage: "/index [path]",
-        description: "Indexes DOCX files into the knowledge base",
-    },
-    CommandSpec {
         name: "/train",
-        usage: "/train [corpus|live N|model]",
-        description: "Runs policy or model training",
+        usage: "/train [@file|dir|live]",
+        description: "Ingests docs, builds datasets & trains policy",
     },
     CommandSpec {
         name: "/feedback",
@@ -238,14 +227,19 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Reports model and policy telemetry",
     },
     CommandSpec {
-        name: "/status",
-        usage: "/status",
-        description: "Reports system and memory status",
+        name: "/settings",
+        usage: "/settings",
+        description: "Opens settings panel and command reference (Ctrl+P)",
     },
     CommandSpec {
         name: "/clear",
         usage: "/clear",
         description: "Clears the conversation view",
+    },
+    CommandSpec {
+        name: "/copy",
+        usage: "/copy",
+        description: "Copies the last assistant response to clipboard (Ctrl+Y)",
     },
     CommandSpec {
         name: "/exit",
@@ -262,9 +256,23 @@ pub fn command_spec(name: &str) -> Option<&'static CommandSpec> {
 // Input editing
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionKind {
+    Command,
+    File { at_index: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionItem {
+    pub display: String,
+    pub value: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionMenu {
-    pub items: Vec<&'static str>,
+    pub kind: CompletionKind,
+    pub items: Vec<CompletionItem>,
     pub selected: usize,
 }
 
@@ -436,64 +444,181 @@ impl InputState {
         append_history(text);
     }
 
-    pub fn completion_candidates(&self) -> Vec<&'static str> {
-        let text = self.text();
-        if !text.starts_with('/') || text.contains(char::is_whitespace) {
-            return Vec::new();
+    pub fn delete_word_backward(&mut self) {
+        if self.cursor == 0 {
+            return;
         }
-        COMMANDS
-            .iter()
-            .filter(|spec| spec.name.starts_with(text.as_str()))
-            .map(|spec| spec.name)
-            .collect()
-    }
-
-    pub fn open_completion(&mut self) -> bool {
-        let candidates = self.completion_candidates();
-        if candidates.is_empty() {
-            self.completion = None;
-            return false;
+        let mut idx = self.cursor;
+        while idx > 0 && self.graphemes[idx - 1].chars().all(char::is_whitespace) {
+            idx -= 1;
         }
-        if candidates.len() == 1 {
-            self.apply_completion(candidates[0]);
-            return true;
+        while idx > 0 && !self.graphemes[idx - 1].chars().all(char::is_whitespace) {
+            idx -= 1;
         }
-        self.completion = Some(CompletionMenu {
-            items: candidates,
-            selected: 0,
-        });
-        true
-    }
-
-    pub fn apply_completion(&mut self, command: &str) {
-        self.set_text(&format!("{command} "));
+        self.graphemes.drain(idx..self.cursor);
+        self.cursor = idx;
+        self.history_index = None;
         self.completion = None;
+    }
+
+    pub fn completion_selected(&self) -> Option<&CompletionItem> {
+        self.completion
+            .as_ref()
+            .and_then(|menu| menu.items.get(menu.selected))
     }
 
     pub fn completion_next(&mut self) {
         if let Some(menu) = &mut self.completion {
-            menu.selected = (menu.selected + 1) % menu.items.len();
+            if !menu.items.is_empty() {
+                menu.selected = (menu.selected + 1) % menu.items.len();
+            }
         }
     }
 
     pub fn completion_prev(&mut self) {
         if let Some(menu) = &mut self.completion {
-            menu.selected = if menu.selected == 0 {
-                menu.items.len().saturating_sub(1)
-            } else {
-                menu.selected - 1
-            };
+            if !menu.items.is_empty() {
+                menu.selected = if menu.selected == 0 {
+                    menu.items.len().saturating_sub(1)
+                } else {
+                    menu.selected - 1
+                };
+            }
         }
-    }
-
-    pub fn completion_selected(&self) -> Option<&'static str> {
-        self.completion
-            .as_ref()
-            .and_then(|menu| menu.items.get(menu.selected).copied())
     }
 
     pub fn close_completion(&mut self) {
         self.completion = None;
+    }
+
+    /// Re-evaluates completions based on current text and cursor position.
+    /// NEVER auto-expands or modifies user text! Only updates the completion menu.
+    pub fn refresh_completion(&mut self, workspace_files: &[crate::files::DiscoveredFile]) {
+        // 1. Check for active @file mention
+        if let Some(mention) = crate::files::detect_file_mention(&self.graphemes, self.cursor) {
+            let matches = crate::files::filter_files(workspace_files, &mention.query, 15);
+            if matches.is_empty() {
+                self.completion = Some(CompletionMenu {
+                    kind: CompletionKind::File {
+                        at_index: mention.at_index,
+                    },
+                    items: vec![CompletionItem {
+                        display: "No matching files".to_string(),
+                        value: String::new(),
+                        detail: String::new(),
+                    }],
+                    selected: 0,
+                });
+            } else {
+                let items: Vec<CompletionItem> = matches
+                    .iter()
+                    .map(|f| CompletionItem {
+                        display: f.relative_path.clone(),
+                        value: f.relative_path.clone(),
+                        detail: format!("{} · {}", f.badge(), f.formatted_size()),
+                    })
+                    .collect();
+                self.completion = Some(CompletionMenu {
+                    kind: CompletionKind::File {
+                        at_index: mention.at_index,
+                    },
+                    items,
+                    selected: 0,
+                });
+            }
+            return;
+        }
+
+        // 2. Check for slash command completion
+        let full_text = self.text();
+        if full_text.starts_with('/') {
+            let cursor_prefix = if self.cursor <= self.graphemes.len() {
+                self.graphemes[..self.cursor].concat()
+            } else {
+                full_text.clone()
+            };
+
+            // Only complete command if cursor is before any argument whitespace
+            if !cursor_prefix.contains(char::is_whitespace) {
+                let matches: Vec<&CommandSpec> = COMMANDS
+                    .iter()
+                    .filter(|cmd| cmd.name.starts_with(&cursor_prefix))
+                    .collect();
+
+                if !matches.is_empty() {
+                    let items: Vec<CompletionItem> = matches
+                        .iter()
+                        .map(|cmd| CompletionItem {
+                            display: cmd.name.to_string(),
+                            value: cmd.name.to_string(),
+                            detail: cmd.description.to_string(),
+                        })
+                        .collect();
+                    self.completion = Some(CompletionMenu {
+                        kind: CompletionKind::Command,
+                        items,
+                        selected: 0,
+                    });
+                    return;
+                }
+            }
+        }
+
+        // No active mention or command prefix
+        self.completion = None;
+    }
+
+    /// Explicitly triggers completion upon user pressing Tab.
+    /// Returns true if completion was applied or menu was opened.
+    pub fn trigger_tab_completion(&mut self, workspace_files: &[crate::files::DiscoveredFile]) -> bool {
+        if self.completion.is_some() {
+            return self.apply_selected_completion();
+        }
+
+        self.refresh_completion(workspace_files);
+        if let Some(menu) = &self.completion {
+            let actionable: Vec<&CompletionItem> =
+                menu.items.iter().filter(|it| !it.value.is_empty()).collect();
+            if actionable.len() == 1 {
+                return self.apply_selected_completion();
+            }
+            return !actionable.is_empty();
+        }
+        false
+    }
+
+    /// Applies the currently selected item in the completion menu.
+    pub fn apply_selected_completion(&mut self) -> bool {
+        let Some(menu) = self.completion.take() else {
+            return false;
+        };
+        let Some(item) = menu.items.get(menu.selected) else {
+            return false;
+        };
+        if item.value.is_empty() {
+            return false;
+        }
+
+        match menu.kind {
+            CompletionKind::Command => {
+                self.set_text(&format!("{} ", item.value));
+                true
+            }
+            CompletionKind::File { at_index } => {
+                let insertion = crate::files::format_file_mention_insertion(&item.value);
+                let insert_graphemes: Vec<String> = insertion
+                    .graphemes(true)
+                    .map(str::to_string)
+                    .collect();
+
+                let end = self.cursor.min(self.graphemes.len());
+                self.graphemes
+                    .splice(at_index..end, insert_graphemes.iter().cloned());
+                self.cursor = at_index + insert_graphemes.len();
+                self.history_index = None;
+                true
+            }
+        }
     }
 
     /// Returns the visible substring and the cursor offset in terminal cells.
@@ -598,6 +723,8 @@ pub struct App {
     pub history_loaded: bool,
     pub last_backend_error: Option<String>,
     pub was_online: bool,
+    pub last_layout: crate::ui::layout::LayoutRects,
+    pub workspace_files: Vec<crate::files::DiscoveredFile>,
 }
 
 impl App {
@@ -605,15 +732,14 @@ impl App {
         let mut input = InputState::default();
         input.load_history();
         let (dashboard, messages, backend) = if demo {
-            (
-                demo_dashboard(),
-                demo_messages(),
-                BackendState::Demo,
-            )
+            (demo_dashboard(), demo_messages(), BackendState::Demo)
         } else {
             (Dashboard::default(), Vec::new(), BackendState::Connecting)
         };
         let next_message_id = messages.iter().map(|m| m.id).max().unwrap_or(0) + 1;
+        let follow_tail = !demo;
+        let workspace_files =
+            crate::files::discover_workspace_files(std::path::Path::new("."), 6, 500);
         Self {
             demo,
             focus: Focus::Input,
@@ -624,7 +750,7 @@ impl App {
             next_message_id,
             conversation_revision: 1,
             scroll_top: 0,
-            follow_tail: true,
+            follow_tail,
             last_top: 0,
             last_max_top: 0,
             last_viewport: 0,
@@ -653,7 +779,14 @@ impl App {
             history_loaded: demo,
             last_backend_error: None,
             was_online: false,
+            last_layout: crate::ui::layout::LayoutRects::default(),
+            workspace_files,
         }
+    }
+
+    pub fn refresh_workspace_files(&mut self) {
+        self.workspace_files =
+            crate::files::discover_workspace_files(std::path::Path::new("."), 6, 500);
     }
 
     pub fn on_tick(&mut self) {
@@ -707,6 +840,231 @@ impl App {
         self.history_loaded = true;
     }
 
+    pub fn copy_last_response(&mut self) {
+        let last_reply = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Assistant)
+            .map(|m| m.content.clone());
+
+        if let Some(content) = last_reply {
+            let mut copied = false;
+            // 1. Try wl-copy (Wayland)
+            if let Ok(mut child) = std::process::Command::new("wl-copy")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    use std::io::Write;
+                    let _ = stdin.write_all(content.as_bytes());
+                }
+                if let Ok(status) = child.wait() {
+                    if status.success() {
+                        copied = true;
+                    }
+                }
+            }
+            // 2. Try xclip (X11)
+            if !copied {
+                if let Ok(mut child) = std::process::Command::new("xclip")
+                    .arg("-selection")
+                    .arg("clipboard")
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use std::io::Write;
+                        let _ = stdin.write_all(content.as_bytes());
+                    }
+                    if let Ok(status) = child.wait() {
+                        if status.success() {
+                            copied = true;
+                        }
+                    }
+                }
+            }
+            // 3. Emit OSC 52 ANSI escape sequence as standard terminal clipboard bridge
+            use std::io::Write;
+            let b64 = {
+                const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                let bytes = content.as_bytes();
+                let mut out = String::new();
+                for chunk in bytes.chunks(3) {
+                    let b0 = chunk[0];
+                    let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+                    let b2 = if chunk.len() > 2 { chunk[2] } else { 0 };
+                    out.push(B64_CHARS[(b0 >> 2) as usize] as char);
+                    out.push(B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+                    if chunk.len() > 1 {
+                        out.push(B64_CHARS[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+                    } else {
+                        out.push('=');
+                    }
+                    if chunk.len() > 2 {
+                        out.push(B64_CHARS[(b2 & 0x3f) as usize] as char);
+                    } else {
+                        out.push('=');
+                    }
+                }
+                out
+            };
+            let osc52 = format!("\x1b]52;c;{b64}\x07");
+            let _ = std::io::stdout().write_all(osc52.as_bytes());
+            let _ = std::io::stdout().flush();
+
+            self.toast("Copied reply to clipboard · Hold Shift to select text", ToastKind::Success);
+        } else {
+            self.toast("No assistant message to copy yet", ToastKind::Info);
+        }
+    }
+
+    pub fn open_output_directory(&mut self) {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/l41n-pr0t0".to_string());
+        let output_dir = std::path::PathBuf::from(home).join(".filevo/output");
+        let _ = std::fs::create_dir_all(&output_dir);
+        let spawned = std::process::Command::new("dolphin")
+            .arg(&output_dir)
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("xdg-open")
+                    .arg(&output_dir)
+                    .spawn()
+            });
+        match spawned {
+            Ok(_) => {
+                self.toast(
+                    format!("Opened in Dolphin: {}", output_dir.display()),
+                    ToastKind::Success,
+                );
+            }
+            Err(err) => {
+                self.toast(
+                    format!("Failed to open file manager: {err}"),
+                    ToastKind::Error,
+                );
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- mouse
+
+    pub fn on_mouse(&mut self, event: crossterm::event::MouseEvent) -> AppAction {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        match event.kind {
+            MouseEventKind::ScrollUp => {
+                self.on_mouse_scroll(event.column, event.row, -3)
+            }
+            MouseEventKind::ScrollDown => {
+                self.on_mouse_scroll(event.column, event.row, 3)
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.on_mouse_click(event.column, event.row)
+            }
+            _ => AppAction::None,
+        }
+    }
+
+    fn on_mouse_scroll(&mut self, col: u16, row: u16, delta: i32) -> AppAction {
+        let layout = self.last_layout;
+        // Detail view scroll if active
+        if self.view != View::Home {
+            if delta < 0 {
+                self.scroll_detail_up(delta.unsigned_abs() as usize);
+            } else {
+                self.scroll_detail_down(delta.unsigned_abs() as usize);
+            }
+            return AppAction::None;
+        }
+
+        // Documents panel scroll
+        if row >= layout.documents.y
+            && row < layout.documents.y + layout.documents.height
+            && col >= layout.documents.x
+            && col < layout.documents.x + layout.documents.width
+        {
+            if delta < 0 {
+                self.doc_selected = self.doc_selected.saturating_sub(1);
+            } else {
+                let max = self.dashboard.documents.len().saturating_sub(1);
+                self.doc_selected = (self.doc_selected + 1).min(max);
+            }
+            return AppAction::None;
+        }
+
+        // Conversation scroll
+        if delta < 0 {
+            self.scroll_conversation_up(delta.unsigned_abs() as usize);
+        } else {
+            self.scroll_conversation_down(delta.unsigned_abs() as usize);
+        }
+        AppAction::None
+    }
+
+    fn on_mouse_click(&mut self, col: u16, row: u16) -> AppAction {
+        let layout = self.last_layout;
+
+        // In detail view, clicking top header returns to Home
+        if self.view != View::Home && row < 3 {
+            self.view = View::Home;
+            self.active_tab = NavTab::Home;
+            return AppAction::None;
+        }
+
+        // Navigation bar click
+        if row >= layout.nav.y
+            && row < layout.nav.y + layout.nav.height
+            && col >= layout.nav.x
+            && col < layout.nav.x + layout.nav.width
+        {
+            if let Some(tab) = nav_tab_at(col, layout.nav) {
+                return self.activate_nav(tab);
+            }
+        }
+
+        // Model & Session panel click
+        if row >= layout.model.y
+            && row < layout.model.y + layout.model.height
+            && col >= layout.model.x
+            && col < layout.model.x + layout.model.width
+        {
+            return self.activate_nav(NavTab::Model);
+        }
+
+        // Input prompt click
+        if row >= layout.prompt.y && row < layout.prompt.y + layout.prompt.height {
+            self.focus = Focus::Input;
+            return AppAction::None;
+        }
+
+        // Conversation click
+        if row >= layout.conversation.y
+            && row < layout.conversation.y + layout.conversation.height
+            && col >= layout.conversation.x
+            && col < layout.conversation.x + layout.conversation.width
+        {
+            self.focus = Focus::Conversation;
+            return AppAction::None;
+        }
+
+        // Documents panel click
+        if row >= layout.documents.y
+            && row < layout.documents.y + layout.documents.height
+            && col >= layout.documents.x
+            && col < layout.documents.x + layout.documents.width
+        {
+            self.focus = Focus::Documents;
+            let rel_row = row.saturating_sub(layout.documents.y + 1) as usize;
+            if rel_row < self.dashboard.documents.len() {
+                self.doc_selected = rel_row;
+                self.attach_selected_document();
+            }
+            return AppAction::None;
+        }
+
+        AppAction::None
+    }
+
     // ------------------------------------------------------------- keyboard
 
     pub fn on_key(&mut self, key: KeyEvent) -> AppAction {
@@ -718,8 +1076,19 @@ impl App {
             self.should_quit = true;
             return AppAction::Quit;
         }
+        if ctrl && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P')) {
+            return self.activate_nav(NavTab::Settings);
+        }
         if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
             self.cancel_task();
+            return AppAction::None;
+        }
+        if ctrl && matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+            self.copy_last_response();
+            return AppAction::None;
+        }
+        if ctrl && matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+            self.open_output_directory();
             return AppAction::None;
         }
         if ctrl && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R')) {
@@ -746,33 +1115,6 @@ impl App {
             }
         }
 
-        if self.input.completion.is_some() {
-            match key.code {
-                KeyCode::Esc => {
-                    self.input.close_completion();
-                    return AppAction::None;
-                }
-                KeyCode::Tab | KeyCode::Down => {
-                    self.input.completion_next();
-                    return AppAction::None;
-                }
-                KeyCode::BackTab | KeyCode::Up => {
-                    self.input.completion_prev();
-                    return AppAction::None;
-                }
-                KeyCode::Enter => {
-                    if let Some(command) = self.input.completion_selected() {
-                        self.input.apply_completion(command);
-                    }
-                    self.input.close_completion();
-                    return AppAction::None;
-                }
-                _ => {
-                    self.input.close_completion();
-                }
-            }
-        }
-
         if ctrl && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
             self.cycle_focus(!matches!(key.code, KeyCode::BackTab) && !shift);
             return AppAction::None;
@@ -780,6 +1122,10 @@ impl App {
 
         if key.code == KeyCode::Esc {
             if self.focus == Focus::Input {
+                if self.input.completion.is_some() {
+                    self.input.close_completion();
+                    return AppAction::None;
+                }
                 self.focus = Focus::Navigation;
                 self.nav_selected = self.active_tab;
             } else {
@@ -793,41 +1139,84 @@ impl App {
             Focus::Navigation => self.handle_navigation_key(key),
             Focus::Conversation => self.handle_conversation_key(key),
             Focus::Documents => self.handle_documents_key(key),
-            Focus::References => self.handle_references_key(key),
         }
     }
 
     fn handle_input_key(&mut self, key: KeyEvent) -> AppAction {
+        // If completion popup is currently open, handle completion navigation keys
+        if self.input.completion.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.input.close_completion();
+                    return AppAction::None;
+                }
+                KeyCode::Up | KeyCode::BackTab => {
+                    self.input.completion_prev();
+                    return AppAction::None;
+                }
+                KeyCode::Down => {
+                    self.input.completion_next();
+                    return AppAction::None;
+                }
+                KeyCode::Tab | KeyCode::Enter => {
+                    if self.input.apply_selected_completion() {
+                        return AppAction::None;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Enter => self.submit(),
             KeyCode::Tab => {
-                if !self.input.open_completion() {
-                    self.toast("No matching command", ToastKind::Info);
+                if !self.input.trigger_tab_completion(&self.workspace_files) {
+                    self.toast("No completions available", ToastKind::Info);
                 }
                 AppAction::None
             }
             KeyCode::Backspace => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.input.delete_word_backward();
+                } else {
+                    self.input.backspace();
+                }
+                self.input.refresh_completion(&self.workspace_files);
+                AppAction::None
+            }
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.backspace();
+                self.input.refresh_completion(&self.workspace_files);
+                AppAction::None
+            }
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.delete_word_backward();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::Delete => {
                 self.input.delete();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::Left => {
                 self.input.move_left();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::Right => {
                 self.input.move_right();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::Home => {
                 self.input.home();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::End => {
                 self.input.end();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::Up => {
@@ -856,18 +1245,28 @@ impl App {
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.home();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.end();
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.set_text("");
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if ch == '@' {
+                    self.refresh_workspace_files();
+                }
                 self.input.insert_char(ch);
+                self.input.refresh_completion(&self.workspace_files);
                 AppAction::None
             }
             _ => AppAction::None,
@@ -982,46 +1381,13 @@ impl App {
         }
     }
 
-    fn handle_references_key(&mut self, key: KeyEvent) -> AppAction {
-        let count = self.dashboard.references.len();
-        match key.code {
-            KeyCode::Up if count > 0 => {
-                self.ref_selected = self.ref_selected.checked_sub(1).unwrap_or(count - 1);
-                AppAction::None
-            }
-            KeyCode::Down if count > 0 => {
-                self.ref_selected = (self.ref_selected + 1) % count;
-                AppAction::None
-            }
-            KeyCode::Enter => {
-                if let Some(reference) = self.dashboard.references.get(self.ref_selected) {
-                    if reference.url.trim().is_empty() {
-                        self.toast("This reference has no URL", ToastKind::Warning);
-                        AppAction::None
-                    } else {
-                        let url = reference.url.clone();
-                        self.toast(format!("Opening {}", reference.domain), ToastKind::Info);
-                        AppAction::OpenUrl(url)
-                    }
-                } else {
-                    AppAction::None
-                }
-            }
-            KeyCode::Tab => {
-                self.focus = Focus::Input;
-                AppAction::None
-            }
-            _ => AppAction::None,
-        }
-    }
+
 
     pub fn cycle_focus(&mut self, forward: bool) {
-        const ORDER: [Focus; 5] = [
+        const ORDER: [Focus; 3] = [
             Focus::Input,
             Focus::Navigation,
             Focus::Conversation,
-            Focus::Documents,
-            Focus::References,
         ];
         let current = ORDER
             .iter()
@@ -1036,55 +1402,85 @@ impl App {
         if self.focus == Focus::Navigation {
             self.nav_selected = self.active_tab;
         }
-        if self.focus == Focus::Documents {
-            let count = self.dashboard.documents.len();
-            self.doc_selected = self.doc_selected.min(count.saturating_sub(1));
-        }
-        if self.focus == Focus::References {
-            let count = self.dashboard.references.len();
-            self.ref_selected = self.ref_selected.min(count.saturating_sub(1));
-        }
     }
 
-    pub fn activate_nav(&mut self, tab: NavTab) {
+    pub fn activate_nav(&mut self, tab: NavTab) -> AppAction {
         self.active_tab = tab;
         self.nav_selected = tab;
         self.focus = Focus::Input;
         match tab {
             NavTab::Home => {
                 self.view = View::Home;
+                AppAction::None
             }
             NavTab::Create => {
                 self.view = View::Home;
                 self.input.set_text("/create ");
                 self.toast("Describe the document to create", ToastKind::Info);
+                AppAction::None
             }
             NavTab::Analyze => {
                 self.view = View::Home;
                 self.input.set_text("/analyze ");
-                self.toast("Enter a document, directory or codebase path", ToastKind::Info);
+                self.toast(
+                    "Enter a document, directory or codebase path",
+                    ToastKind::Info,
+                );
+                AppAction::None
             }
-            NavTab::Index => {
-                self.view = View::Home;
-                self.input.set_text("/index ");
-                self.toast("Enter a directory to index", ToastKind::Info);
-            }
+
             NavTab::Train => {
                 self.view = View::Home;
-                self.input.set_text("/train ");
-                self.toast("Enter a training mode or episode count", ToastKind::Info);
+                if self.input.text().trim() == "/train" {
+                    self.submit()
+                } else {
+                    self.input.set_text("/train");
+                    self.toast("Click TRAIN again or press Enter to run", ToastKind::Info);
+                    AppAction::None
+                }
             }
             NavTab::Model => {
                 self.view = View::Model;
                 self.detail_scroll = 0;
+                self.detail_error = None;
+                if self.demo {
+                    self.detail_loading = false;
+                    self.toast("Demo model telemetry", ToastKind::Info);
+                    AppAction::None
+                } else {
+                    self.detail_loading = true;
+                    let (task_id, cancel) =
+                        self.begin_task(PendingKind::ModelView, "Reading model telemetry");
+                    AppAction::Send(Request::Python {
+                        task_id,
+                        args: vec!["model".to_string()],
+                        cancel,
+                    })
+                }
             }
-            NavTab::Status => {
-                self.view = View::Status;
+            NavTab::Settings => {
+                self.view = View::Settings;
                 self.detail_scroll = 0;
+                self.detail_error = None;
+                if self.demo {
+                    self.detail_loading = false;
+                    self.toast("Demo settings", ToastKind::Info);
+                    AppAction::None
+                } else {
+                    self.detail_loading = true;
+                    let (task_id, cancel) =
+                        self.begin_task(PendingKind::SettingsView, "Reading system settings");
+                    AppAction::Send(Request::Python {
+                        task_id,
+                        args: vec!["settings".to_string()],
+                        cancel,
+                    })
+                }
             }
             NavTab::Help => {
                 self.view = View::Help;
                 self.detail_scroll = 0;
+                AppAction::None
             }
         }
     }
@@ -1138,7 +1534,19 @@ impl App {
         let id = self.next_message_id;
         let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
         self.add_message(
-            Message::new(id, Role::User, format!("{command}{}", if argument.is_empty() { String::new() } else { format!(" {argument}") }), timestamp),
+            Message::new(
+                id,
+                Role::User,
+                format!(
+                    "{command}{}",
+                    if argument.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {argument}")
+                    }
+                ),
+                timestamp,
+            ),
             false,
         );
 
@@ -1147,14 +1555,24 @@ impl App {
                 self.view = View::Help;
                 self.active_tab = NavTab::Help;
                 self.detail_scroll = 0;
-                self.toast("Help opened · HOME returns to conversation", ToastKind::Info);
+                self.toast(
+                    "Help opened · HOME returns to conversation",
+                    ToastKind::Info,
+                );
                 AppAction::None
             }
             "/clear" => {
                 self.clear_conversation();
                 self.view = View::Home;
                 self.active_tab = NavTab::Home;
-                self.toast("Conversation view cleared · backend memory retained", ToastKind::Info);
+                self.toast(
+                    "Conversation view cleared · backend memory retained",
+                    ToastKind::Info,
+                );
+                AppAction::None
+            }
+            "/copy" => {
+                self.copy_last_response();
                 AppAction::None
             }
             "/exit" | "/quit" | "/q" => {
@@ -1202,7 +1620,10 @@ impl App {
                     self.error_message("Usage: /research <topic>");
                     return AppAction::None;
                 }
-                self.run_conversation_command(vec!["research".to_string(), argument.to_string()], "Researching live sources")
+                self.run_conversation_command(
+                    vec!["research".to_string(), argument.to_string()],
+                    "Researching live sources",
+                )
             }
             "/analyze" => {
                 let path = if argument.is_empty() { "." } else { argument };
@@ -1212,20 +1633,31 @@ impl App {
                 )
             }
             "/index" => {
-                let path = if argument.is_empty() { "." } else { argument };
+                let argument = if argument.is_empty() { "." } else { argument };
+                let mut args = vec!["train".to_string()];
+                args.extend(argument.split_whitespace().map(str::to_string));
+                self.toast("/index unified into /train", ToastKind::Info);
                 self.run_conversation_command(
-                    vec!["index".to_string(), path.to_string()],
-                    "Indexing documents",
+                    args,
+                    "Running unified ingestion and training",
                 )
             }
             "/train" => {
-                let argument = if argument.is_empty() { "corpus" } else { argument };
+                let argument = if argument.is_empty() {
+                    "corpus"
+                } else {
+                    argument
+                };
                 let mut args = vec!["train".to_string()];
                 args.extend(argument.split_whitespace().map(str::to_string));
                 self.run_conversation_command(args, "Running training workflow")
             }
             "/feedback" => {
-                let reward = if argument.is_empty() { "+1.0" } else { argument };
+                let reward = if argument.is_empty() {
+                    "+1.0"
+                } else {
+                    argument
+                };
                 self.run_conversation_command(
                     vec!["feedback".to_string(), reward.to_string()],
                     "Recording feedback",
@@ -1253,30 +1685,36 @@ impl App {
                     return AppAction::None;
                 }
                 self.detail_loading = true;
-                let (task_id, cancel) = self.begin_task(PendingKind::ModelView, "Reading model telemetry");
+                let (task_id, cancel) =
+                    self.begin_task(PendingKind::ModelView, "Reading model telemetry");
                 AppAction::Send(Request::Python {
                     task_id,
                     args: vec!["model".to_string()],
                     cancel,
                 })
             }
-            "/status" => {
-                self.view = View::Status;
-                self.active_tab = NavTab::Status;
+            "/settings" => {
+                self.view = View::Settings;
+                self.active_tab = NavTab::Settings;
                 self.detail_scroll = 0;
                 self.detail_error = None;
                 if self.demo {
                     self.detail_loading = false;
-                    self.toast("Demo system telemetry", ToastKind::Info);
+                    self.toast("Demo settings", ToastKind::Info);
                     return AppAction::None;
                 }
                 self.detail_loading = true;
-                let (task_id, cancel) = self.begin_task(PendingKind::StatusView, "Reading system status");
+                let (task_id, cancel) =
+                    self.begin_task(PendingKind::SettingsView, "Reading system settings");
                 AppAction::Send(Request::Python {
                     task_id,
-                    args: vec!["status".to_string()],
+                    args: vec!["settings".to_string()],
                     cancel,
                 })
+            }
+            "/open" | "/browse" | "/files" => {
+                self.open_output_directory();
+                AppAction::None
             }
             _ => {
                 self.error_message(format!(
@@ -1384,7 +1822,9 @@ impl App {
                 let kind = self.pending.as_ref().map(|pending| pending.kind);
                 self.finish_task();
                 let message = match kind {
-                    Some(PendingKind::Create) => format_daemon_document("Document created", &payload),
+                    Some(PendingKind::Create) => {
+                        format_daemon_document("Document created", &payload)
+                    }
                     Some(PendingKind::Revise) => {
                         format_daemon_document("Document revised", &payload)
                     }
@@ -1414,12 +1854,12 @@ impl App {
                     };
                     self.model_output = Some(output);
                     self.last_dashboard_refresh = None;
-                } else if matches!(kind, Some(PendingKind::StatusView)) {
+                } else if matches!(kind, Some(PendingKind::SettingsView)) {
                     self.detail_loading = false;
                     self.detail_error = if success {
                         None
                     } else {
-                        Some("The /status command reported a failure".to_string())
+                        Some("The /settings command reported a failure".to_string())
                     };
                     self.status_output = Some(output);
                     self.last_dashboard_refresh = None;
@@ -1439,20 +1879,28 @@ impl App {
                 }
                 self.view = if matches!(kind, Some(PendingKind::ModelView)) {
                     View::Model
-                } else if matches!(kind, Some(PendingKind::StatusView)) {
-                    View::Status
+                } else if matches!(kind, Some(PendingKind::SettingsView)) {
+                    View::Settings
                 } else {
                     View::Home
                 };
                 self.active_tab = match self.view {
                     View::Home => NavTab::Home,
                     View::Model => NavTab::Model,
-                    View::Status => NavTab::Status,
+                    View::Settings => NavTab::Settings,
                     View::Help => NavTab::Help,
                 };
                 self.toast(
-                    if success { "Command completed" } else { "Command failed" },
-                    if success { ToastKind::Success } else { ToastKind::Error },
+                    if success {
+                        "Command completed"
+                    } else {
+                        "Command failed"
+                    },
+                    if success {
+                        ToastKind::Success
+                    } else {
+                        ToastKind::Error
+                    },
                 );
             }
             Event::Cancelled { task_id } => {
@@ -1461,7 +1909,7 @@ impl App {
                 }
                 let kind = self.pending.as_ref().map(|pending| pending.kind);
                 self.finish_task();
-                if matches!(kind, Some(PendingKind::ModelView | PendingKind::StatusView)) {
+                if matches!(kind, Some(PendingKind::ModelView | PendingKind::SettingsView)) {
                     self.detail_loading = false;
                     self.detail_error = Some("Cancelled".to_string());
                 } else {
@@ -1475,7 +1923,7 @@ impl App {
                 }
                 let kind = self.pending.as_ref().map(|pending| pending.kind);
                 self.finish_task();
-                if matches!(kind, Some(PendingKind::ModelView | PendingKind::StatusView)) {
+                if matches!(kind, Some(PendingKind::ModelView | PendingKind::SettingsView)) {
                     self.detail_loading = false;
                     self.detail_error = Some(message.clone());
                 }
@@ -1507,22 +1955,7 @@ impl App {
         self.last_dashboard_refresh = Some(Instant::now());
         self.last_backend_error = None;
         if !self.history_loaded {
-            if self.messages.is_empty() && !self.dashboard.turns.is_empty() {
-                for turn in &self.dashboard.turns {
-                    let id = self.next_message_id;
-                    let timestamp = format_epoch_hms(turn.timestamp);
-                    let message = match turn.role {
-                        Role::User => Message::new(id, Role::User, turn.content.clone(), timestamp),
-                        Role::Assistant => {
-                            Message::new(id, Role::Assistant, turn.content.clone(), timestamp)
-                        }
-                        Role::System => Message::new(id, Role::System, turn.content.clone(), timestamp),
-                    };
-                    self.messages.push(message);
-                    self.next_message_id += 1;
-                }
-                self.conversation_revision = self.conversation_revision.wrapping_add(1);
-            }
+            // Fresh session on every launch: do not restore stale conversation turns from prior sessions
             self.history_loaded = true;
         }
         if !self.dashboard.documents.is_empty() {
@@ -1565,7 +1998,7 @@ impl App {
         if self.demo
             || self.dashboard_in_flight
             || self.task.is_running()
-            || !matches!(self.view, View::Home | View::Model | View::Status)
+            || !matches!(self.view, View::Home | View::Model | View::Settings)
         {
             return false;
         }
@@ -1694,9 +2127,15 @@ impl App {
 }
 
 fn format_daemon_document(heading: &str, payload: &Value) -> String {
-    let path = payload.get("active_doc").and_then(Value::as_str).unwrap_or("");
+    let path = payload
+        .get("active_doc")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let topic = payload.get("topic").and_then(Value::as_str).unwrap_or("");
-    let archetype = payload.get("archetype").and_then(Value::as_str).unwrap_or("");
+    let archetype = payload
+        .get("archetype")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let mut lines = Vec::new();
     if path.is_empty() {
         lines.push(format!(
@@ -1732,6 +2171,10 @@ pub fn risk_colour(risk: Risk) -> &'static str {
     }
 }
 
+pub fn nav_tab_at(x: u16, nav_area: ratatui::layout::Rect) -> Option<NavTab> {
+    crate::ui::navigation::nav_tab_at(x, nav_area)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1756,6 +2199,13 @@ mod tests {
         }
         assert!(!COMMANDS.iter().any(|spec| spec.name == "/prd"));
         assert!(!python.contains("\"/prd\""));
+        assert!(!COMMANDS.iter().any(|spec| spec.name == "/index"));
+        let commands_block = python
+            .split("COMMANDS = {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .unwrap_or("");
+        assert!(!commands_block.contains("\"/index\""));
     }
 
     #[test]
@@ -1785,12 +2235,105 @@ mod tests {
     fn tab_completion_opens_and_applies() {
         let mut input = InputState::default();
         input.set_text("/cr");
-        assert!(input.open_completion());
-        assert_eq!(input.completion_selected(), Some("/create"));
-        if let Some(command) = input.completion_selected() {
-            input.apply_completion(command);
-        }
+        assert!(input.trigger_tab_completion(&[]));
         assert_eq!(input.text(), "/create ");
+        assert!(input.completion.is_none());
+
+        input.set_text("/c");
+        assert!(input.trigger_tab_completion(&[]));
+        assert!(input.completion_selected().is_some());
+        input.completion_next();
+        assert_eq!(
+            input.completion_selected().map(|c| c.value.as_str()),
+            Some("/clear")
+        );
+        assert!(input.apply_selected_completion());
+        assert_eq!(input.text(), "/clear ");
+
+        // When typing '/', all visible commands are shown in menu without modifying buffer
+        input.set_text("/");
+        input.refresh_completion(&[]);
+        assert!(input.completion.is_some());
+        let menu = input.completion.as_ref().unwrap();
+        assert_eq!(menu.items.len(), COMMANDS.len());
+        assert_eq!(input.text(), "/");
+    }
+
+    #[test]
+    fn backspace_on_slash_command_does_not_lock_or_expand() {
+        let mut input = InputState::default();
+        // Type /he
+        input.set_text("/he");
+        input.refresh_completion(&[]);
+        assert!(input.completion.is_some());
+        assert_eq!(input.text(), "/he");
+
+        // Backspace should delete 'e', becoming /h (NOT auto-expanding to /help!)
+        input.backspace();
+        input.refresh_completion(&[]);
+        assert_eq!(input.text(), "/h");
+        assert!(input.completion.is_some());
+
+        // Backspace again should delete 'h', becoming /
+        input.backspace();
+        input.refresh_completion(&[]);
+        assert_eq!(input.text(), "/");
+        assert!(input.completion.is_some());
+
+        // Backspace again should delete '/', becoming empty and closing menu
+        input.backspace();
+        input.refresh_completion(&[]);
+        assert_eq!(input.text(), "");
+        assert!(input.completion.is_none());
+    }
+
+    #[test]
+    fn file_completion_matches_and_inserts() {
+        let files = vec![
+            crate::files::DiscoveredFile {
+                relative_path: "report.docx".to_string(),
+                filename: "report.docx".to_string(),
+                extension: "docx".to_string(),
+                size_bytes: 2048,
+            },
+            crate::files::DiscoveredFile {
+                relative_path: "folder with spaces/notes.txt".to_string(),
+                filename: "notes.txt".to_string(),
+                extension: "txt".to_string(),
+                size_bytes: 1024,
+            },
+        ];
+
+        let mut input = InputState::default();
+        input.set_text("/train @rep");
+        input.refresh_completion(&files);
+        assert!(input.completion.is_some());
+        assert_eq!(
+            input.completion_selected().map(|c| c.value.as_str()),
+            Some("report.docx")
+        );
+        assert!(input.apply_selected_completion());
+        assert_eq!(input.text(), "/train @report.docx ");
+
+        // Test file with spaces wraps in quotes
+        input.set_text("/train @note");
+        input.refresh_completion(&files);
+        assert!(input.completion.is_some());
+        assert!(input.apply_selected_completion());
+        assert_eq!(
+            input.text(),
+            "/train @\"folder with spaces/notes.txt\" "
+        );
+    }
+
+    #[test]
+    fn delete_word_backward_cleans_prompt() {
+        let mut input = InputState::default();
+        input.set_text("/train @sample.docx");
+        input.delete_word_backward();
+        assert_eq!(input.text(), "/train ");
+        input.delete_word_backward();
+        assert_eq!(input.text(), "");
     }
 
     #[test]
@@ -1821,11 +2364,12 @@ mod tests {
         app.input.set_text("/prd something");
         let action = app.submit();
         assert!(matches!(action, AppAction::None));
-        assert!(app
-            .messages
-            .last()
-            .map(|m| m.is_error && m.content.contains("Unknown command"))
-            .unwrap_or(false));
+        assert!(
+            app.messages
+                .last()
+                .map(|m| m.is_error && m.content.contains("Unknown command"))
+                .unwrap_or(false)
+        );
     }
 
     #[test]
@@ -1844,6 +2388,8 @@ mod tests {
     fn scrolled_to_bottom_follows_new_messages() {
         let mut app = App::new(true);
         app.note_conversation_metrics(20, 20, 5);
+        assert!(!app.follow_tail, "demo starts at the top of the log");
+        app.scroll_conversation_down(100);
         assert!(app.follow_tail);
         app.simple_message(Role::Assistant, "new reply");
         assert!(app.follow_tail);

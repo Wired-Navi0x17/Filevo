@@ -7,13 +7,13 @@
 
 use crate::app::App;
 use crate::model::{DistributionError, Risk};
-use crate::ui::text::{truncate, width, wrap};
+use crate::ui::text::{truncate, wrap};
 use crate::ui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
+use ratatui::widgets::Paragraph;
 
 const LABEL_WIDTH: usize = 18;
 
@@ -22,7 +22,9 @@ fn risk_style(risk: Risk, theme: &Theme) -> Style {
         Risk::Low => Style::default()
             .fg(theme.green)
             .add_modifier(Modifier::BOLD),
-        Risk::Medium => Style::default().fg(theme.amber).add_modifier(Modifier::BOLD),
+        Risk::Medium => Style::default()
+            .fg(theme.amber)
+            .add_modifier(Modifier::BOLD),
         Risk::High => Style::default().fg(theme.red).add_modifier(Modifier::BOLD),
         Risk::Unknown => Style::default().fg(theme.text_dim),
     }
@@ -30,8 +32,7 @@ fn risk_style(risk: Risk, theme: &Theme) -> Style {
 
 fn gauge(value: f64, gauge_width: usize, theme: &Theme, bold: bool) -> Vec<Span<'static>> {
     let gauge_width = gauge_width.max(1);
-    let filled = ((value.clamp(0.0, 1.0) * gauge_width as f64).round() as usize)
-        .min(gauge_width);
+    let filled = ((value.clamp(0.0, 1.0) * gauge_width as f64).round() as usize).min(gauge_width);
     let filled = if value > 0.0 { filled.max(1) } else { filled };
     let fill_style = if bold {
         Style::default()
@@ -53,18 +54,40 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if area.width < 10 || area.height < 3 {
         return;
     }
-    let block = theme.panel().title(Line::from(vec![
-        Span::styled(
-            format!("{} ", theme.glyph("◈", "*")),
-            Style::default().fg(theme.primary),
-        ),
-        Span::styled(
-            "RLCD Decision ",
-            Style::default()
-                .fg(theme.primary)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    let ticker = crate::ui::art::activity_ticker(app.tick);
+    let block = theme.panel().title(Line::from(if app.demo {
+        vec![
+            Span::styled(
+                format!("{} ", ticker),
+                Style::default().fg(theme.primary),
+            ),
+            Span::styled(
+                "RLCD Decision ",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "· demo ",
+                Style::default()
+                    .fg(theme.amber)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    } else {
+        vec![
+            Span::styled(
+                format!("{} ", ticker),
+                Style::default().fg(theme.primary),
+            ),
+            Span::styled(
+                "RLCD Decision ",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -85,9 +108,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 let value = decision.values[index].unwrap_or(0.0);
                 let is_winner = winner == Some(*name);
                 let label_style = if is_winner {
-                    Style::default()
-                        .fg(theme.text)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme.text)
                 };
@@ -97,7 +118,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                         Style::default().fg(theme.primary),
                     ),
                     Span::styled(
-                        format!("{:<LABEL_WIDTH$}", truncate(name, LABEL_WIDTH)),
+                        format!(
+                            "{:<width$}",
+                            truncate(name, LABEL_WIDTH),
+                            width = LABEL_WIDTH
+                        ),
                         label_style,
                     ),
                     Span::styled(" ", Style::default()),
@@ -156,9 +181,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                     )));
                 }
             }
-            if app.demo && lines.len() < inner_height {
+            if app.demo && inner_height >= 10 {
                 lines.push(Line::from(Span::styled(
-                    "Demo fixture · not a live calibration",
+                    "Demo fixture · not live",
                     Style::default()
                         .fg(theme.amber)
                         .add_modifier(Modifier::BOLD),
@@ -211,6 +236,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 mod tests {
     use super::*;
     use crate::model::Decision;
+    use crate::ui::text::width;
     use std::collections::HashMap;
 
     #[test]

@@ -13,3 +13,14 @@ wheels/
 # Rust build artifacts
 target/
 **/target/
+bin/
+
+# Documents, PDFs, and large data
+*.pdf
+output/
+filevo_test_workspace/
+tests/fixtures/
+sea_animals_encyclopedia.docx
+pristine_template.docx
+*.AppImage
+
