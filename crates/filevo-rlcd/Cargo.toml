@@ -1,0 +1,19 @@
+[package]
+name = "filevo-rlcd"
+version = "0.1.0"
+edition = "2021"
+description = "RLCD tree policy: Jev-style Choice / Score / Noul decisions over a knowledge tree, learned with REINFORCE"
+
+[lib]
+name = "filevo_rlcd"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Built by maturin (`maturin develop --release --features python`).
+python = ["dep:pyo3", "pyo3/extension-module"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+pyo3 = { version = "0.22", optional = true }

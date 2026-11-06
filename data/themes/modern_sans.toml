@@ -1,0 +1,37 @@
+id = "modern_sans"
+label = "Modern sans"
+description = "Clean sans-serif layout with a strong accent colour and tight hierarchy for technical reports, specifications, engineering documents and briefings."
+words_per_page = 460
+
+[fonts]
+display = "Segoe UI Semibold"
+body = "Segoe UI"
+mono = "Consolas"
+
+[size]
+title = 26
+subtitle = 12
+h1 = 16
+h2 = 13
+h3 = 11
+body = 10.5
+caption = 9
+table = 9
+
+[color]
+text = "1B1F24"
+accent = "1F4E79"
+accent_soft = "2E6A9E"
+muted = "5C6670"
+rule = "1F4E79"
+rule_soft = "D6DEE6"
+callout_fill = "EAF1F8"
+
+[layout]
+margin_top = 68
+margin_bottom = 68
+margin_side = 72
+line_spacing = 1.3
+space_after = 6
+heading_numbering = true
+toc_levels = 2

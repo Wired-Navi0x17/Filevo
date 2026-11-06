@@ -451,12 +451,25 @@ dependencies = [
 name = "filevo-core"
 version = "0.1.0"
 dependencies = [
+ "filevo-decision",
  "filevo-docx",
  "filevo-eval",
  "filevo-inference",
  "filevo-memory",
  "filevo-policy",
+ "filevo-spec",
  "filevo-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "filevo-decision"
+version = "0.1.0"
+dependencies = [
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",
@@ -467,6 +480,10 @@ dependencies = [
 name = "filevo-docx"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "filevo-decision",
+ "filevo-spec",
+ "flate2",
  "quick-xml",
  "serde",
  "serde_json",
@@ -520,6 +537,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "filevo-spec"
+version = "0.1.0"
+dependencies = [
+ "filevo-decision",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "filevo-store"
 version = "0.1.0"
 dependencies = [
@@ -544,6 +572,7 @@ checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1703,6 +1732,12 @@ dependencies = [
  "memchr",
  "zopfli",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmij"

@@ -48,7 +48,7 @@ class RLProbabilisticModel(RLCDDecisionEngine):
 
         lines.append("  │")
         lines.append("  │ Gates:")
-        for gate in ["include_formulas", "include_diagrams", "include_benchmarks", "include_tables"]:
+        for gate in ["include_tables", "include_callouts"]:
             p = self.sigmoid(gate)
             indicator = "●" if p > 0.5 else "○"
             name = gate.replace("include_", "").capitalize()

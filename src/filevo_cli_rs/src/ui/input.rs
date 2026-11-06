@@ -298,6 +298,7 @@ fn render_shortcuts(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             ("Enter", "Send"),
             ("Tab", "Autocomplete"),
             ("Ctrl+O", "Dolphin"),
+            ("Ctrl+G", if app.dashboard.telemetry.web.enabled { "Web ON" } else { "Web OFF" }),
             ("Ctrl+Y", "Copy"),
             ("Ctrl+C", "Cancel"),
         ]

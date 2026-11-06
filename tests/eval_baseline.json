@@ -1,0 +1,95 @@
+{
+  "timestamp": "2026-11-01T15:55:22.094680",
+  "model_id": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+  "device": "cuda",
+  "aggregate": {
+    "total_documents": 3,
+    "total_words": 10771,
+    "mean_grounding_coverage": 0.4505,
+    "mean_grounding_coverage_all_sections": 0.4192,
+    "mean_repetition_8gram": 0.0197,
+    "mean_citation_coverage": 0.0,
+    "total_banned_terms": 0,
+    "total_generation_seconds": 232.58
+  },
+  "documents": [
+    {
+      "word_count": 3491,
+      "section_count": 11,
+      "pages": 12,
+      "mean_grounding_coverage": 0.599,
+      "coverage_all_sections": 0.599,
+      "repetition_8gram": 0.0143,
+      "citation_coverage": 0.0,
+      "banned_terms": {
+        "benthic": 0,
+        "pelagic": 0,
+        "littoral": 0,
+        "marine ecology": 0,
+        "furthermore": 0,
+        "moreover": 0,
+        "in today's fast-paced world": 0,
+        "seamless": 0,
+        "leverage": 0,
+        "_total": 0
+      },
+      "generation_seconds": 77.53,
+      "slug": "plant_root_systems",
+      "prompt": "Technical report on plant root systems, 10 pages",
+      "docx_path": "/home/l41n-pr0t0/.filevo/output/Technical_Report_on_Plant_Root_Syst_5.docx",
+      "raw_text_path": "/tmp/opencode/eval/plant_root_systems.txt"
+    },
+    {
+      "word_count": 4393,
+      "section_count": 13,
+      "pages": 14,
+      "mean_grounding_coverage": 0.5023,
+      "coverage_all_sections": 0.5023,
+      "repetition_8gram": 0.0268,
+      "citation_coverage": 0.0,
+      "banned_terms": {
+        "benthic": 0,
+        "pelagic": 0,
+        "littoral": 0,
+        "marine ecology": 0,
+        "furthermore": 0,
+        "moreover": 0,
+        "in today's fast-paced world": 0,
+        "seamless": 0,
+        "leverage": 0,
+        "_total": 0
+      },
+      "generation_seconds": 92.41,
+      "slug": "plant_classification_history",
+      "prompt": "Academic monograph on the history of plant classification, 12 pages",
+      "docx_path": "/home/l41n-pr0t0/.filevo/output/The_History_Of_Plant_Classification.docx",
+      "raw_text_path": "/tmp/opencode/eval/plant_classification_history.txt"
+    },
+    {
+      "word_count": 2887,
+      "section_count": 9,
+      "pages": 9,
+      "mean_grounding_coverage": 0.2502,
+      "coverage_all_sections": 0.1564,
+      "repetition_8gram": 0.0179,
+      "citation_coverage": 0.0,
+      "banned_terms": {
+        "benthic": 0,
+        "pelagic": 0,
+        "littoral": 0,
+        "marine ecology": 0,
+        "furthermore": 0,
+        "moreover": 0,
+        "in today's fast-paced world": 0,
+        "seamless": 0,
+        "leverage": 0,
+        "_total": 0
+      },
+      "generation_seconds": 62.64,
+      "slug": "solar_cell_efficiency",
+      "prompt": "Engineering guide to solar cell efficiency, 8 pages",
+      "docx_path": "/home/l41n-pr0t0/.filevo/output/Engineering_Guide_To_Solar_Cell_Eff.docx",
+      "raw_text_path": "/tmp/opencode/eval/solar_cell_efficiency.txt"
+    }
+  ]
+}

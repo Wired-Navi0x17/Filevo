@@ -124,12 +124,15 @@ class FilevoModelTrainer:
             torch.float16 if torch.cuda.is_available() else torch.float32
         )
 
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        from src.doc_gen.network_gate import is_webfetch_enabled
+        local_only = not is_webfetch_enabled()
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id, local_files_only=local_only)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
         model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
+            local_files_only=local_only,
             torch_dtype=dtype,
             device_map="auto" if device == "cuda" else None,
         )

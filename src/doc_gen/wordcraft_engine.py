@@ -287,7 +287,14 @@ class WordCraftEngine:
         if doc_ir.include_toc:
             cmds.append({
                 "command": "references.toc",
-                "params": {"levels": 2, "title": "Table of Contents", "pageNumbers": True, "hyperlinks": True},
+                "params": {
+                    "levels": 2,
+                    "title": "Table of Contents",
+                    "pageNumbers": True,
+                    "rightAlign": True,
+                    "tabLeader": "dot",
+                    "hyperlinks": True,
+                },
             })
             cmds.append({"command": "caret.docEnd"})
             cmds.append({"command": "text.pageBreak"})
@@ -373,6 +380,27 @@ class WordCraftEngine:
                             cmds.append({"command": "format.color", "params": {"color": "64748B"}})
                             cmds.append({"command": "caret.docEnd"})
                         cmds.append({"command": "text.newParagraph"})
+
+                elif isinstance(block, ImageBlock):
+                    # Real Image Insertion via WordCraft Illustrations API
+                    params: dict[str, Any] = {}
+                    if getattr(block, "path", None):
+                        params["path"] = str(block.path)
+                    if getattr(block, "caption", None):
+                        params["alt"] = str(block.caption)
+                    if getattr(block, "width_inches", None):
+                        params["width"] = float(block.width_inches) * 72.0
+                    cmds.append({"command": "insert.picture", "params": params})
+                    cmds.append({"command": "caret.docEnd"})
+                    if block.caption:
+                        cmds.append({"command": "text.newParagraph"})
+                        cmds.append({"command": "text.insert", "params": {"text": f"Figure: {block.caption}"}})
+                        cmds.append({"command": "caret.home", "params": {"extend": True}})
+                        cmds.append({"command": "format.italic"})
+                        cmds.append({"command": "format.size", "params": {"size": 9.5}})
+                        cmds.append({"command": "format.color", "params": {"color": "64748B"}})
+                        cmds.append({"command": "caret.docEnd"})
+                    cmds.append({"command": "text.newParagraph"})
 
                 elif isinstance(block, PageBreakBlock):
                     cmds.append({"command": "text.pageBreak"})

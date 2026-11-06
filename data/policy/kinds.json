@@ -1,0 +1,11 @@
+{
+  "definition": "definition: what it is, the meaning of the concept, terminology",
+  "intuition": "intuition: why it works, an explanation in plain words, the idea behind it",
+  "formula": "formula: the equation, mathematics, derivation, mathematical notation and maths",
+  "algorithm_step": "algorithm: the steps of the procedure, how to compute it, pseudocode, method",
+  "example": "example: a worked example with numbers, an illustration, a case",
+  "comparison": "comparison: a table comparing methods, versus, differences, pros and cons",
+  "pitfall": "pitfalls: common mistakes, limitations, caveats, what can go wrong",
+  "application": "applications: real-world uses, where it is used in industry, practical use cases",
+  "history": "history: origin, timeline, who invented it, background"
+}

@@ -331,6 +331,7 @@ fn settings_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width
         ("Ctrl+Y", "Copy last assistant response to clipboard"),
         ("Ctrl+C", "Cancel running backend task"),
         ("Ctrl+R", "Refresh live dashboard telemetry"),
+        ("Ctrl+G", "Toggle webfetch (off = local database only)"),
         ("Ctrl+Q", "Exit Filevo immediately"),
         ("Esc", "Switch focus between prompt and navigation"),
         ("F1", "Open full Help & Documentation"),
@@ -564,6 +565,7 @@ fn help_view(lines: &mut Vec<Line<'static>>, app: &App, theme: &Theme, width: us
         ("Ctrl+A / Ctrl+E", "Start / end of the input line"),
         ("Ctrl+U", "Clear the input line"),
         ("Ctrl+R", "Refresh live dashboard telemetry"),
+        ("Ctrl+G", "Toggle webfetch (off = local database only)"),
         ("Ctrl+C", "Cancel the running backend task"),
         ("Ctrl+Q", "Exit Filevo and restore the terminal"),
     ];

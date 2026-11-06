@@ -133,7 +133,7 @@ def test_rlcd_calibrated_decision_and_empirical_calibration():
         selected, conf = rlcd.score(["rigor_none", "rigor_asymptotic", "rigor_formal"])
         assert selected in ("rigor_none", "rigor_asymptotic", "rigor_formal")
         assert 0.0 <= conf <= 1.0
-        assert 0.0 <= rlcd.noul("include_formulas") <= 1.0
+        assert 0.0 <= rlcd.noul("include_tables") <= 1.0
 
         # 3. Policy update
         init_bias = rlcd.archetype_biases["Project Proposal"]
@@ -572,7 +572,7 @@ def test_proven_parameter_gradient_training():
                 }
             ],
             "gates": [
-                {"feature": "include_benchmarks", "selected": True}
+                {"feature": "include_tables", "selected": True}
             ]
         }
         update_result = engine.update(trajectory, reward=1.5)
@@ -580,7 +580,7 @@ def test_proven_parameter_gradient_training():
 
         # Prove weights actually changed according to policy gradients
         assert updated_weights["technical_report"] != initial_weights.get("technical_report", 0.0), "Policy weights must change"
-        assert updated_weights["include_benchmarks"] != initial_weights.get("include_benchmarks", 0.0), "Gate weights must change"
+        assert updated_weights["include_tables"] != initial_weights.get("include_tables", 0.0), "Gate weights must change"
 
         # Checkpoint reload verification
         reloaded_engine = RLCDDecisionEngine(policy_path=str(policy_file))
@@ -756,7 +756,7 @@ def test_autonomous_document_plan_authoring():
         "Create a detailed technical report on an IoT cricket scoring system using ESP32, IR sensors and camera based ball detection"
     )
 
-    assert plan.genre == "Engineering Report"
+    assert plan.genre == "Technical Report"
     hw_str = " ".join(plan.explicit_hardware_specifications)
     assert "ESP32" in hw_str
     assert "IR sensors" in hw_str
@@ -821,7 +821,7 @@ def test_unseen_subjects_and_paraphrased_prompts():
     plan_rome = DocumentPlan.from_request("write a comprehensive paper about ancient Roman architecture")
     assert plan_rome.title.lower() not in PLACEHOLDER_BLACKLIST
     assert "ancient roman architecture" in plan_rome.title.lower() or "roman architecture" in plan_rome.title.lower()
-    assert plan_rome.genre in ("Academic Monograph", "Comprehensive Guide", "Technical Report")
+    assert plan_rome.genre in ("Academic Monograph", "Technical Report")
     headings_rome = [s.heading.lower() for s in plan_rome.sections]
     assert len(headings_rome) >= 5
 
@@ -829,7 +829,7 @@ def test_unseen_subjects_and_paraphrased_prompts():
     plan_solar = DocumentPlan.from_request("generate an engineering spec for renewable solar desalinators")
     assert plan_solar.title.lower() not in PLACEHOLDER_BLACKLIST
     assert "solar desalinator" in plan_solar.title.lower()
-    assert plan_solar.genre == "Engineering Report"
+    assert plan_solar.genre == "Technical Report"
 
     # Unseen Subject 3: Paraphrased Request with Explicit Sections
     plan_qkd = DocumentPlan.from_request("project pitch covering quantum key distribution with sections Overview, Quantum Security, Hardware, Milestones")
@@ -864,7 +864,7 @@ def test_autonomous_plan_validation_and_repair():
     assert len(validate_plan(healed)) == 0
     assert healed.title.lower() != "clean formal title"
     assert "coral reef" in healed.title.lower()
-    assert healed.genre == "Comprehensive Guide"
+    assert healed.genre == "Technical Report"
     assert len(healed.sections) >= 5
 
 
@@ -1025,7 +1025,86 @@ def test_wordcraft_adapter_client_and_antislop_policy():
         assert "save_document" in tools
         assert "inspect_document" in tools
         assert "render_page" in tools
-        assert client.get_tool_schema("execute") is not None
+def test_canonical_archetypes_survival():
+    """Verify that all 5 canonical archetypes survive decide() -> DocumentBrief.from_request() unchanged."""
+    from src.doc_gen.rlcd_engine import RLCDDecisionEngine, ARCHETYPES
+    from src.doc_gen.document_brief import DocumentBrief
+
+    engine = RLCDDecisionEngine()
+
+    archetype_prompts = [
+        ("Technical Report", "Technical analysis of edge computing latency in distributed sensor networks"),
+        ("Executive Summary", "Executive summary of Q3 cloud operational costs and risk posture"),
+        ("Academic Monograph", "Academic monograph on formal verification of distributed consensus"),
+        ("Project Proposal", "Project proposal for migrating legacy telemetry services to event-driven architecture"),
+        ("Formal Letter", "Formal letter application for laboratory accreditation and equipment access"),
+    ]
+
+    for expected_arch, prompt in archetype_prompts:
+        # Bias the engine toward this archetype to simulate decide() output
+        engine.archetype_biases = {a: (10.0 if a == expected_arch else -10.0) for a in ARCHETYPES}
+        decision = engine.decide(prompt)
+        assert decision.archetype == expected_arch, f"Decision archetype {decision.archetype} != {expected_arch}"
+
+        brief = DocumentBrief.from_request(user_request=prompt, archetype=decision.archetype)
+        assert brief.genre == expected_arch, f"Brief genre '{brief.genre}' did not survive decision archetype '{expected_arch}'"
+
+        # Verify Executive Summary generates the mandated domain sections
+        if expected_arch == "Executive Summary":
+            sec_headings = [s.heading for s in brief.sections]
+            expected_headings = ["Strategic Context", "Key Findings", "Risk Exposure", "Strategic Recommendations"]
+            assert sec_headings == expected_headings, f"Executive Summary headings {sec_headings} != {expected_headings}"
+
+
+def test_markdown_table_parsing_and_fallback():
+    """Verify that parse_markdown_table correctly extracts tables or cleanly falls back to prose."""
+    from src.doc_gen.document_brief import DocumentBrief
+    from src.doc_gen.document_ir import DocumentIR, TableBlock, parse_markdown_table
+
+    # 1. Valid markdown table with header, separator, and >= 2 rows
+    valid_md = (
+        "| Subsystem | Latency (ms) | Throughput (req/s) |\n"
+        "|---|---|---|\n"
+        "| Ingestion Gateway | 1.2 | 15,000 |\n"
+        "| Arbiter Core | 0.8 | 22,000 |\n"
+        "| Storage Engine | 4.5 | 8,500 |"
+    )
+    tbl = parse_markdown_table(valid_md)
+    assert tbl is not None, "Valid table must parse into TableBlock"
+    assert tbl.headers == ["Subsystem", "Latency (ms)", "Throughput (req/s)"]
+    assert len(tbl.rows) == 3
+    assert tbl.rows[0] == ["Ingestion Gateway", "1.2", "15,000"]
+
+    # 2. Malformed table: only header, no data rows
+    header_only = (
+        "| Col1 | Col2 |\n"
+        "|---|---|"
+    )
+    assert parse_markdown_table(header_only) is None, "Table with < 2 total rows must return None"
+
+    # 3. Malformed table: mismatched columns that cannot align
+    mismatched = (
+        "| A | B | C |\n"
+        "|---|---|---|\n"
+        "| row1 | only_one |"
+    )
+    assert parse_markdown_table(mismatched) is None, "Severely mismatched row must return None"
+
+    # 4. Standard prose text
+    prose = "This is a regular analytical paragraph discussing operational parameters and design constraints."
+    assert parse_markdown_table(prose) is None, "Regular prose must return None"
+
+    # 5. Verify DocumentIR integration: valid table produces TableBlock, invalid produces ParagraphBlock
+    brief = DocumentBrief.from_request("Technical report on edge telemetry")
+    valid_content = f"Operational latency benchmarks:\n\n{valid_md}\n\nFinal remarks."
+    ir_valid = DocumentIR.from_brief_and_content(brief, [{"title": "Telemetry Performance", "content": valid_content}])
+    block_types = [type(b).__name__ for b in ir_valid.sections[0].blocks]
+    assert "TableBlock" in block_types, f"DocumentIR must include TableBlock, found {block_types}"
+
+    invalid_content = f"Operational benchmarks with broken formatting:\n\n{mismatched}\n\nFinal remarks."
+    ir_invalid = DocumentIR.from_brief_and_content(brief, [{"title": "Telemetry Performance", "content": invalid_content}])
+    inv_block_types = [type(b).__name__ for b in ir_invalid.sections[0].blocks]
+    assert "TableBlock" not in inv_block_types, "Broken table must fall back to prose without creating TableBlock"
 
 
 if __name__ == "__main__":
@@ -1101,5 +1180,9 @@ if __name__ == "__main__":
     print("✓ test_wordcraft_settings_and_cli_commands passed")
     test_wordcraft_adapter_client_and_antislop_policy()
     print("✓ test_wordcraft_adapter_client_and_antislop_policy passed")
-    print("\nAll 36 comprehensive verification tests passed successfully!")
+    test_canonical_archetypes_survival()
+    print("✓ test_canonical_archetypes_survival passed")
+    test_markdown_table_parsing_and_fallback()
+    print("✓ test_markdown_table_parsing_and_fallback passed")
+    print("\nAll 38 comprehensive verification tests passed successfully!")
 

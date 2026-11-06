@@ -1,0 +1,37 @@
+id = "compact_reference"
+label = "Compact reference"
+description = "Dense compact layout with small type, narrow margins and tight spacing for cheat sheets, formula sheets and quick reference cards."
+words_per_page = 650
+
+[fonts]
+display = "Georgia"
+body = "Segoe UI"
+mono = "Consolas"
+
+[size]
+title = 20
+subtitle = 10.5
+h1 = 13
+h2 = 11
+h3 = 10
+body = 9.5
+caption = 8.5
+table = 8.5
+
+[color]
+text = "1F2328"
+accent = "3B3F8C"
+accent_soft = "5458A8"
+muted = "60646E"
+rule = "3B3F8C"
+rule_soft = "DADBEA"
+callout_fill = "EEEEF7"
+
+[layout]
+margin_top = 46
+margin_bottom = 46
+margin_side = 50
+line_spacing = 1.15
+space_after = 4
+heading_numbering = false
+toc_levels = 1

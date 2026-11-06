@@ -76,6 +76,52 @@ class TableBlock:
     horizontal_rules_only: bool = True  # Anti-slop table styling
 
 
+def parse_markdown_table(text: str) -> TableBlock | None:
+    """Parse and validate a markdown table string into a TableBlock.
+
+    Requires:
+    - At least one header row and at least one data row (matrix >= 2 rows).
+    - Header must contain >= 2 non-empty columns.
+    - Data rows must align in column count with the header.
+    Returns None if malformed, invalid, or insufficient rows, falling back to prose.
+    """
+    lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+    if len(lines) < 2:
+        return None
+
+    # All lines must appear tabular with '|'
+    if not all(l.startswith("|") and l.endswith("|") for l in lines):
+        return None
+
+    matrix: list[list[str]] = []
+    for line in lines:
+        inner = line.strip("|").strip()
+        # Skip markdown separator row |---|---|
+        if inner and all(c in "-:| \t" for c in inner):
+            continue
+        cols = [c.strip() for c in line.strip("|").split("|")]
+        matrix.append(cols)
+
+    if len(matrix) < 2:
+        return None
+
+    header = matrix[0]
+    if len(header) < 2 or not any(header):
+        return None
+
+    n_cols = len(header)
+    rows: list[list[str]] = []
+    for r in matrix[1:]:
+        if len(r) != n_cols:
+            return None
+        rows.append(r)
+
+    if not rows:
+        return None
+
+    return TableBlock(headers=header, rows=rows)
+
+
 @dataclass
 class CalloutBlock:
     """An executive signature element or key figures panel."""
@@ -93,6 +139,15 @@ class ImageBlock:
     caption: str = ""
     source: str = ""
     width_inches: float = 6.0
+
+
+@dataclass
+class EquationBlock:
+    """A display equation written in LaTeX, with an optional name and number."""
+
+    latex: str
+    name: str = ""
+    number: int | None = None
 
 
 @dataclass
@@ -119,6 +174,12 @@ class SectionIR:
     purpose: str = ""
     blocks: list[Any] = field(default_factory=list)
     page_break_before: bool = False
+    subsections: list["SectionIR"] = field(default_factory=list)
+
+    def walk(self):
+        yield self
+        for s in self.subsections:
+            yield from s.walk()
 
 
 @dataclass
@@ -157,6 +218,11 @@ class DocumentIR:
     references: list[ReferenceItem] = field(default_factory=list)
     appendices: list[AppendixIR] = field(default_factory=list)
     margin_inches: float = 1.0
+    # Set by the knowledge-tree pipeline: a theme dict (data/themes/*.toml),
+    # whether to print a cover page, and the references heading text.
+    theme: dict[str, Any] | None = None
+    cover_page: bool = False
+    references_title: str = "References"
 
     @classmethod
     def from_brief_and_content(
@@ -164,6 +230,7 @@ class DocumentIR:
         brief: DocumentBrief,
         sections_data: list[dict[str, Any]],
         antislop: AntiSlopPolicy | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> DocumentIR:
         """Constructs a fully typed DocumentIR from DocumentBrief and generated section contents."""
         policy = antislop or get_antislop_policy()
@@ -171,16 +238,13 @@ class DocumentIR:
         topic = brief.topic
         genre = brief.genre
 
-        # Determine signature element
-        sig_elem = "Executive Engineering Parameters & Metric Invariants Panel"
-        if "cricket" in topic.lower() or "telemetry" in topic.lower():
-            sig_elem = "Sensor Acquisition Pipeline & Gate Invariant Matrix"
-        elif any(w in topic.lower() for w in ("animal", "marine", "sea", "ocean", "nature")):
-            sig_elem = "Taxonomic Lineage & Conservation Status Panel"
-        elif genre == "Formal Letter":
+        # The signature element is one sustained structural device. Its content is
+        # derived from the document's own evidence rather than a hardcoded domain
+        # blurb: the previous version injected marine-taxonomy boilerplate into any
+        # topic whose name contained "plant" or "nature".
+        sig_elem = "Scope and Evidence Base"
+        if genre == "Formal Letter":
             sig_elem = "Administrative Authorization Block"
-        elif genre == "Project Proposal":
-            sig_elem = "Strategic Value Realization & ROI Timeline"
 
         doc = cls(
             title=title,
@@ -219,33 +283,29 @@ class DocumentIR:
                 page_break_before=page_break,
             )
 
-            # Insert Signature Element right after introductory executive section
+            # Insert the signature element right after the executive section.
             if idx == 0 and genre != "Formal Letter" and policy.signature_element_required:
-                top_l = topic.lower()
-                if any(w in top_l for w in ("animal", "marine", "sea", "ocean", "nature", "plant", "biology")):
-                    sig_body = (
-                        f"Verified Domain Parameters for {topic}:\n"
-                        f"• Taxonomic Integrity: Comprehensive phylogenetic classification across benthic, pelagic, and littoral zones.\n"
-                        f"• Empirical Boundary: Biological adaptations grounded in verified marine ecology and physiological baselines.\n"
-                        f"• Conservation Benchmark: Alignment with IUCN Red List categories and CITES multilateral agreements."
+                sig_lines = [f"Scope: {topic}"]
+                prov = provenance or {}
+                if prov.get("sources"):
+                    sig_lines.append(
+                        f"Evidence base: {prov['sources']} local source(s) "
+                        f"retrieved {prov.get('retrieved', 'n/a')}"
                     )
-                elif "cricket" in top_l or "telemetry" in top_l or "sensor" in top_l:
-                    sig_body = (
-                        f"Verified Domain Parameters for {topic}:\n"
-                        f"• Deterministic Telemetry: Sub-millisecond interrupt service routines on embedded microcontrollers.\n"
-                        f"• Signal Noise Rejection: Multi-sample debouncing and camera trajectory cross-validation.\n"
-                        f"• Quality Assurance: Validated against Anti-Slop Docs structural & voice criteria."
-                    )
+                    if prov.get("coverage") is not None:
+                        sig_lines.append(
+                            f"Grounding coverage: {prov['coverage']:.0%} of sentences traced to sources"
+                        )
                 else:
-                    sig_body = (
-                        f"Verified Domain Parameters for {topic}:\n"
-                        f"• Architectural Invariants: Modular component boundaries with deterministic lifecycle management.\n"
-                        f"• Empirical Boundary: Complete alignment with user-specified contracts and verified baselines.\n"
-                        f"• Quality Assurance: Validated against Anti-Slop Docs structural & voice criteria."
+                    sig_lines.append(
+                        "Evidence base: generated from the document plan; no local sources ingested."
                     )
+                sig_lines.append(f"Structure: {len(sections_data)} sections, {genre}")
+
+                sig_body = "\n".join(sig_lines)
                 sec_ir.blocks.append(
                     CalloutBlock(
-                        title=f"Signature Element: {sig_elem}",
+                        title=sig_elem,
                         content=sig_body,
                         kind="signature",
                     )
@@ -271,18 +331,10 @@ class DocumentIR:
                     continue
 
                 # Check if markdown table (| col1 | col2 |)
-                table_lines = [l.strip() for l in p_str.split("\n") if l.strip()]
-                if all(l.startswith("|") and l.endswith("|") for l in table_lines) and len(table_lines) >= 2:
-                    matrix = []
-                    for l in table_lines:
-                        if all(c in "| -:" for c in l):
-                            continue
-                        cols = [c.strip() for c in l.strip("|").split("|")]
-                        if cols:
-                            matrix.append(cols)
-                    if len(matrix) >= 2:
-                        sec_ir.blocks.append(TableBlock(headers=matrix[0], rows=matrix[1:]))
-                        continue
+                tbl_block = parse_markdown_table(p_str)
+                if tbl_block is not None:
+                    sec_ir.blocks.append(tbl_block)
+                    continue
 
                 # Ordinary prose paragraph (Anti-slop default)
                 # First paragraph of intro is marked as BLUF
@@ -294,6 +346,15 @@ class DocumentIR:
             # Check explicit sec['table']
             if sec.get("table") and isinstance(sec["table"], list) and len(sec["table"]) >= 2:
                 sec_ir.blocks.append(TableBlock(headers=sec["table"][0], rows=sec["table"][1:]))
+
+            # Check if section has an attached image
+            sec_img = sec.get("image")
+            if sec_img is not None:
+                img_path = getattr(sec_img, "path", None) or (sec_img.get("path") if isinstance(sec_img, dict) else str(sec_img))
+                img_caption = getattr(sec_img, "caption", "") or (sec_img.get("caption", "") if isinstance(sec_img, dict) else "")
+                img_src = getattr(sec_img, "source_url", "") or (sec_img.get("source_url", "") if isinstance(sec_img, dict) else "")
+                if img_path:
+                    sec_ir.blocks.append(ImageBlock(path=str(img_path), caption=img_caption, source=img_src))
 
             # Check if brief planned a table for this section
             for ps in brief.sections:
@@ -320,37 +381,7 @@ class DocumentIR:
 
     @staticmethod
     def _create_domain_table(visual_type: str, topic: str) -> TableBlock | None:
-        """Constructs an anti-slop tabular block with horizontal rules and real data."""
-        if visual_type == "taxonomic_comparison_table":
-            return TableBlock(
-                headers=["Clade / Order", "Representative Species", "Key Morphological Adaptation", "Ecosystem Function"],
-                rows=[
-                    ["Cetacea", "Balaenoptera musculus (Blue Whale)", "Expanded baleen plates for krill filtration", "Primary ocean nutrient circulating"],
-                    ["Carnivora (Pinnipedia)", "Odobenus rosmarus (Walrus)", "Hypertrophied tusks and vibrissae arrays", "Benthic mollusk dredging"],
-                    ["Sirenia", "Trichechus manatus (Manatee)", "Prehensile vibrissal lips and thick pachystotic ribs", "Aquatic vegetation browsing"],
-                    ["Octopoda", "Enteroctopus dofleini (Giant Octopus)", "Chromatophore dense mantle & distributed neural ganglia", "Mid-trophic opportunistic predator"],
-                ],
-                caption=f"Comparative Taxonomic and Functional Morphologies for {topic}",
-            )
-        elif visual_type == "habitat_distribution_matrix":
-            return TableBlock(
-                headers=["Geographical Zone", "Target Biome", "Depth Gradient", "Primary Anthropogenic Threat"],
-                rows=[
-                    ["North Atlantic Arctic", "Pelagic / Marginal Ice Zone", "0 m – 350 m", "Commercial shipping noise and sea ice recession"],
-                    ["Indo-Pacific Tropical", "Coral Reef Lagoon", "1 m – 45 m", "Thermal bleaching and ocean acidification"],
-                    ["South Pacific Abyss", "Benthic Abyssal Plain", "3,000 m – 5,500 m", "Deep-sea mineral prospecting and sediment plumes"],
-                ],
-                caption=f"Biogeographical Distribution Matrix for {topic}",
-            )
-        elif visual_type in ("hardware_comparison_table", "testing_matrix"):
-            return TableBlock(
-                headers=["Subsystem / Test", "Hardware Interface", "Operational Parameter", "Verification Status"],
-                rows=[
-                    ["Optical Interrupt Gate", "IR Optical Beam Sensors", "Sub-millisecond GPIO Interrupt", "Verified (0.42 ms latency)"],
-                    ["Crease Tracking", "Camera Trajectory Module", "60 FPS Optical Frame Capture", "Verified (99.8% precision)"],
-                    ["State Machine Arbiter", "Dual-Core ESP32 MCU", "Deterministic Event Serialization", "Verified (Zero dropped frames)"],
-                    ["Central Telemetry", "Low-Latency WiFi/MQTT", "Idempotent JSON Payload Dispatch", "Verified (< 15 ms transmission)"],
-                ],
-                caption=f"Hardware Specification and Verification Matrix for {topic}",
-            )
+        """Constructs an anti-slop tabular block only when genuine tabular data is available."""
+        # Never emit placeholder tables filled with invented or domain-mismatched rows.
+        # Tables are rendered only when explicit tabular data is provided in section content.
         return None

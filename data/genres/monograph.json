@@ -1,0 +1,25 @@
+{
+  "id": "monograph",
+  "label": "Monograph",
+  "description": "A long-form academic monograph that treats a whole field in depth for researchers: history, foundations, formal results with equations, the major methods and their relationships, applications and open problems. Comprehensive, book-length, research paper, thesis chapter.",
+  "default_words": 12000,
+  "kind_preference": {
+    "definition": 1.0,
+    "intuition": 0.8,
+    "formula": 1.0,
+    "algorithm_step": 0.8,
+    "example": 0.7,
+    "pitfall": 0.6,
+    "comparison": 0.9,
+    "application": 0.8,
+    "history": 1.0
+  },
+  "callout_kinds": [],
+  "kind_labels": {
+    "pitfall": "Caveat",
+    "example": "Example",
+    "history": "Historical note"
+  },
+  "references_title": "Bibliography",
+  "overview_title": "Introduction"
+}

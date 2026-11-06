@@ -1,0 +1,25 @@
+{
+  "id": "reference_sheet",
+  "label": "Reference sheet",
+  "description": "A compact reference sheet or cheat sheet for quick lookup: the key formulas, one-line definitions and comparison tables only, no long explanations. Quick reference, formula sheet, revision card.",
+  "default_words": 900,
+  "kind_preference": {
+    "definition": 0.8,
+    "intuition": 0.1,
+    "formula": 1.0,
+    "algorithm_step": 0.5,
+    "example": 0.1,
+    "pitfall": 0.3,
+    "comparison": 1.0,
+    "application": 0.1,
+    "history": 0.0
+  },
+  "callout_kinds": [],
+  "kind_labels": {
+    "pitfall": "Watch out",
+    "example": "Example",
+    "history": "Background"
+  },
+  "references_title": "Sources",
+  "overview_title": "At a glance"
+}

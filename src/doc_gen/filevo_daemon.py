@@ -359,7 +359,8 @@ class FilevoDaemon:
             except Exception as exc:
                 errors.append(f"system_memory: {exc}")
 
-        web_enabled = os.environ.get("FILEVO_WEB_DISABLED") != "1"
+        from src.doc_gen.network_gate import is_webfetch_enabled
+        web_enabled = is_webfetch_enabled()
         web = {
             "enabled": web_enabled,
             "live_references": len(references),
@@ -491,7 +492,8 @@ class FilevoDaemon:
 
             # Conversational path
             question_cues = ["why", "how", "what", "explain", "describe", "tell me", "does", "difference"]
-            if any(q in p_lower for q in question_cues) or "?" in clean_text:
+            from src.doc_gen.network_gate import is_webfetch_enabled
+            if is_webfetch_enabled() and (any(q in p_lower for q in question_cues) or "?" in clean_text):
                 try:
                     from src.doc_gen.web_researcher import WebResearcher
                     wr = WebResearcher()

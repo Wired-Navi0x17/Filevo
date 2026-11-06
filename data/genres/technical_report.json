@@ -1,0 +1,27 @@
+{
+  "id": "technical_report",
+  "label": "Technical report",
+  "description": "A precise technical report for engineers and practitioners that documents methods, formal definitions, equations, algorithms, comparison tables and trade-offs of a system or technique. Analysis, specification, implementation, evaluation.",
+  "default_words": 4500,
+  "kind_preference": {
+    "definition": 1.0,
+    "intuition": 0.4,
+    "formula": 1.0,
+    "algorithm_step": 1.0,
+    "example": 0.5,
+    "pitfall": 0.7,
+    "comparison": 1.0,
+    "application": 0.7,
+    "history": 0.1
+  },
+  "callout_kinds": [
+    "pitfall"
+  ],
+  "kind_labels": {
+    "pitfall": "Limitation",
+    "example": "Example",
+    "history": "Background"
+  },
+  "references_title": "References",
+  "overview_title": "Summary"
+}

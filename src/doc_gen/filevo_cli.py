@@ -60,6 +60,7 @@ COMMANDS = {
     "/create": "Creates a calibrated document (/create [--live|--desktop|--native] <topic>)",
     "/revise": "Revises and versions active document (/revise <instruction>)",
     "/research": "Researches a topic across web and live sources (/research <topic>)",
+    "/ingest": "Fetches URLs or topics into the local corpus (/ingest <url|topic> ...)",
     "/analyze": "Analyzes a document, collection, or codebase (/analyze <path>)",
     "/train": "Ingests docs, builds datasets & trains policy (/train [@file|dir|live])",
     "/feedback": "Records feedback on active generation (/feedback [+1.0|-0.5])",
@@ -69,6 +70,8 @@ COMMANDS = {
     "/wordcraft": "WordCraft MCP status, desktop mode, and inspection (/wordcraft [status|live|inspect|render])",
     "/open": "Opens generated documents directory in Dolphin file manager (/open or /files)",
     "/settings": "Opens settings panel and command reference (Ctrl+P)",
+    "/seed": "Loads curated knowledge into the local database (/seed [aiml]); works offline",
+    "/webfetch": "Shows or toggles network access (/webfetch [on|off|toggle]); off = local database only",
     "/clear": "Clears terminal screen and redraws Antigravity banner",
     "/copy": "Copies last assistant response to clipboard (Ctrl+Y)",
     "/exit": "Exits the application",
@@ -85,6 +88,7 @@ _wordcraft_engine: Any | None = None
 _llm_client: LocalTransformersClient | None = None
 _memory: ConversationMemory | None = None
 _dataset_builder: DocxDatasetBuilder | None = None
+_corpus_store: Any | None = None
 _latest_references: list[dict[str, str]] = []
 
 
@@ -136,6 +140,16 @@ def get_dataset_builder() -> DocxDatasetBuilder:
     if _dataset_builder is None:
         _dataset_builder = DocxDatasetBuilder()
     return _dataset_builder
+
+
+def get_corpus():
+    """Local source corpus used for grounded generation and citations."""
+    global _corpus_store
+    if _corpus_store is None:
+        from src.doc_gen.corpus_store import CorpusStore
+
+        _corpus_store = CorpusStore()
+    return _corpus_store
 
 
 # ------------------------------------------------------------------ #
@@ -234,19 +248,33 @@ def set_wordcraft_mode_setting(mode_name: str) -> str:
 
 
 def open_document(doc_path: Path | str) -> bool:
-    """Launch system default application to open generated document."""
+    """Launch system default application to open generated document, ensuring single-instance WordCraft."""
     import subprocess
     path = Path(doc_path).resolve()
     if not path.exists():
         return False
     try:
+        from src.doc_gen.wordcraft_adapter import WordCraftClient
         if sys.platform.startswith("darwin"):
             subprocess.Popen(["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
         elif sys.platform.startswith("win"):
             os.startfile(str(path))
+            return True
+        else:
             if (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and os.environ.get("FILEVO_TESTING") != "1":
                 wc_bin = Path.home() / ".local" / "bin" / "wordcraft"
                 if path.suffix.lower() == ".docx" and wc_bin.exists():
+                    # If WordCraft desktop is already running on control port, open via MCP without spawning second instance
+                    if WordCraftClient.is_desktop_reachable():
+                        try:
+                            client = WordCraftClient()
+                            client.start(force_desktop=True)
+                            client.call_tool("open_document", {"path": str(path)})
+                            client.close()
+                            return True
+                        except Exception:
+                            return True
                     subprocess.Popen([str(wc_bin), str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
                     subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -333,7 +361,7 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
     force_pdf = any(f in request_str for f in ("--pdf", "-pdf")) and not force_no_pdf
 
     clean_request = request_str
-    for f in ("--live", "--desktop", "--gui", "--headless", "--native", "--openxml", "--no-pdf", "--without-pdf", "-no-pdf", "--pdf", "-pdf"):
+    for f in ("--live", "--desktop", "--gui", "--headless", "--native", "--openxml", "--no-pdf", "--without-pdf", "-no-pdf", "--pdf", "-pdf", "--auto-ingest"):
         clean_request = clean_request.replace(f, "")
     clean_request = clean_request.strip()
 
@@ -345,35 +373,50 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
     rlcd = get_rlcd()
     renderer = get_renderer()
     memory = get_memory()
+    corpus = get_corpus()
+    corpus_profile = corpus.profile()
 
     with ui.spinner(f"Evaluating RLCD calibrated decision policy for: '{clean_request}'..."):
-        decision = rlcd.decide(clean_request)
+        decision = rlcd.decide(clean_request, knowledge_profile=corpus_profile)
         time.sleep(0.1)
 
     # Render styled decision telemetry panel
     ui.display_decision_card(decision)
 
     llm = get_llm()
+    try:
+        llm.load()
+    except Exception:
+        pass
     formatting = decision.formatting
 
     # Semantic Title, Topic, and Explicit Section extraction via language model
     spec = llm.extract_document_spec(clean_request, memory.get_messages_for_llm())
     explicit_secs = spec.get("explicit_sections") or []
+    extracted_title = spec.get("title")
 
-    # Live Web Research grounding: only when explicitly requested or required
-    web_data = None
-    needs_web = any(k in clean_request.lower() for k in ("web", "browse", "research", "internet", "online", "latest", "news"))
-    if needs_web:
-        clean_query = spec.get("topic") or clean_request
-        with ui.spinner(f"Grounding topic via live web research for '{clean_query}'..."):
-            from src.doc_gen.web_researcher import WebResearcher
-            wr = WebResearcher()
-            web_data = wr.research_topic(clean_query)
-            if web_data.get("has_web_data"):
-                console.print(f"[dim]🌐 Live web knowledge grounded: {len(web_data.get('sources', []))} reference source(s) discovered[/dim]")
+    # Grounding comes from the local corpus, never from the network. /create is
+    # deterministic: the same request against the same index produces the same
+    # evidence. --auto-ingest is the explicit opt-in that touches the web.
+    if "--auto-ingest" in request_str:
+        from src.doc_gen.network_gate import is_webfetch_enabled
+        if is_webfetch_enabled():
+            with ui.spinner("Auto-ingesting topic sources into the local corpus..."):
+                cmd_ingest(spec.get("topic") or clean_request, quiet=True)
+            corpus_profile = corpus.profile()
+        else:
+            console.print("[yellow]--auto-ingest skipped: webfetch is off. Using the local database only "
+                          "(turn it on with /settings webfetch on).[/yellow]")
 
-    web_overview = web_data.get("overview", "") if web_data else ""
-    web_sources = web_data.get("sources", []) if web_data else []
+    if corpus_profile["sources"] == 0:
+        console.print(
+            "[yellow]⚠ Local corpus is empty.[/yellow] Generation will proceed without "
+            "source grounding, so output will be generic. Populate it with "
+            "[bold]/ingest <url or topic>[/bold] for cited, factual content."
+        )
+
+    web_overview = ""
+    web_sources: list[dict[str, Any]] = []
 
     # Construct authoritative DocumentBrief preserving full request and requirements
     brief = DocumentBrief.from_request(
@@ -382,6 +425,8 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
         explicit_sections=explicit_secs,
         web_sources=web_sources,
         attachments=attachments,
+        title=extracted_title,
+        client=llm,
     )
     title = brief.title
     topic = brief.topic
@@ -399,6 +444,33 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
     grounding = f"{web_overview}\n{att_summary}".strip()
 
     with ui.spinner("Synthesizing document content with local model and compiling OpenXML package..."):
+        used_hits: dict[int, dict[str, Any]] = {}
+        section_quality: list[dict[str, Any]] = []
+        ungrounded: list[str] = []
+
+        # Attempt model load
+        model_loaded = False
+        try:
+            model_loaded = llm.load()
+        except Exception as e:
+            console.print(f"[dim yellow]Model load exception: {e}[/dim yellow]")
+
+        brief.is_offline_fallback = not model_loaded
+
+        if not model_loaded:
+            if os.environ.get("FILEVO_OFFLINE") != "1":
+                err_detail = llm._load_error or "Model weights not available or local load failed."
+                console.print(f"[bold red]Error: Language model failed to load ({err_detail}).[/bold red]")
+                console.print("[yellow]Ensure model weights are cached or set FILEVO_ALLOW_DOWNLOAD=1 to sync weights.[/yellow]")
+                console.print("[dim]To intentionally generate offline template prose without a model, set FILEVO_OFFLINE=1.[/dim]")
+                return {
+                    "error": err_detail,
+                    "success": False,
+                    "title": title,
+                    "topic": topic,
+                }
+            console.print("[dim yellow]Note: Running in offline mode (FILEVO_OFFLINE=1); compiling structured outline via DocumentBrief grounding.[/dim yellow]")
+
         if brief.genre == "Formal Letter" or decision.archetype == "Formal Letter":
             sections = [
                 {
@@ -433,47 +505,110 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
                 },
             ]
         else:
-            # Attempt model load if available
-            model_loaded = False
-            try:
-                model_loaded = llm.load()
-            except Exception as e:
-                console.print(f"[dim yellow]Model load exception: {e}[/dim yellow]")
-
-            brief.is_offline_fallback = not model_loaded
-
-            if not model_loaded:
-                console.print("[dim yellow]Note: Local language model offline or unavailable; compiling structured outline via DocumentBrief grounding.[/dim yellow]")
+            from src.doc_gen.corpus_store import build_context_block, sanitize_citation_markers
 
             for p_sec in brief.sections:
                 s_title = p_sec.heading
+
+                # Retrieve per section, not one global blob for the whole
+                # document: the query carries the section's own concepts so
+                # evidence actually matches what is being written.
+                retrieval_query = " ".join(
+                    part for part in (
+                        s_title,
+                        getattr(p_sec, "purpose", "") or "",
+                        " ".join(getattr(p_sec, "required_concepts", []) or []),
+                    ) if part
+                )
+                hits = corpus.retrieve(retrieval_query, k=3)
+                strong = [h for h in hits if h["above_threshold"]]
+                if not strong and hits and hits[0]["confidence"] >= 0.20:
+                    strong = hits[:1]
+
+                section_grounding = build_context_block(strong) if strong else ""
+                if not strong:
+                    ungrounded.append(s_title)
+                for hit in strong:
+                    used_hits[hit["chunk_id"]] = hit
+
                 content = llm.generate_section_content(
                     section_title=s_title,
                     doc_title=title,
                     archetype=brief.genre,
-                    grounding_context=grounding,
+                    grounding_context=section_grounding,
                     brief=brief,
                 )
+
+                # Citations are resolved here, from ids that exist. Numbers the
+                # model invented are dropped before they reach the document.
+                if strong:
+                    content, cited = sanitize_citation_markers(content, len(strong))
+                    for index in cited:
+                        hit = strong[index - 1]
+                        used_hits[hit["chunk_id"]] = hit
+
+                coverage = corpus.grounding_coverage(content, strong) if strong else {
+                    "coverage": 0.0, "weak": [], "sentences": 0, "method": "none"
+                }
+                section_quality.append({
+                    "section": s_title,
+                    "sources": len(strong),
+                    "coverage": coverage["coverage"],
+                    "weak": len(coverage["weak"]),
+                })
+
                 sections.append({
                     "title": s_title,
                     "content": content,
                     "page_break": p_sec.page_break_before,
                     "page_break_before": p_sec.page_break_before,
+                    "image": getattr(p_sec, "image", None),
                 })
 
-        # Append Live Web Sources & References section if web research was conducted
-        if web_sources:
-            ref_content = "Primary references and live web sources consulted during synthesis:\n\n"
+            _report_grounding_quality(section_quality, ungrounded)
+
+        # References are assembled from sources actually supplied to the writing
+        # step, not from every source ingested and never from what the model
+        # claims to have read.
+        if used_hits:
+            # One entry per source, even when several chunks of it were used.
+            unique_sources: dict[str, dict[str, Any]] = {}
+            for hit in used_hits.values():
+                unique_sources.setdefault(hit["url"], hit)
+            ref_lines = []
+            for i, hit in enumerate(
+                sorted(unique_sources.values(), key=lambda h: (h["title"], h["url"])), start=1
+            ):
+                ref_lines.append(
+                    f"{i}. {hit['title']}. {hit['domain']}. {hit['url']} "
+                    f"(retrieved {hit['fetched_at'][:10]}). Licence: {hit['license']}."
+                )
+            sections.append({"title": "References", "content": "\n".join(ref_lines)})
+        elif web_sources:
+            ref_content = "Sources consulted during synthesis:\n\n"
             for s in web_sources[:6]:
                 ref_content += f"• {s.get('title', '')}: {s.get('url', '')}\n"
-            sections.append({"title": "References and Discovered Sources", "content": ref_content})
+            sections.append({"title": "References", "content": ref_content})
 
         from src.doc_gen.document_ir import DocumentIR
         wc = get_wordcraft()
+
+        grounded_sections = [q for q in section_quality if q["sources"] > 0]
+        provenance = {
+            "sources": len({hit["url"] for hit in used_hits.values()}),
+            "coverage": (
+                sum(q["coverage"] for q in grounded_sections) / len(grounded_sections)
+                if grounded_sections else None
+            ),
+            "retrieved": (corpus_profile.get("latest_fetched") or "")[:10] or None,
+            "ungrounded_sections": len(ungrounded),
+        }
+
         doc_ir = DocumentIR.from_brief_and_content(
             brief=brief,
             sections_data=sections,
             antislop=wc.config.antislop,
+            provenance=provenance,
         )
 
         wc_result = None
@@ -549,7 +684,21 @@ def cmd_create(request_str: str, attachments: list[dict[str, Any]] | None = None
     ui.display_document_card(doc_path, title, len(sections), decision.archetype, wc_result=wc_result)
 
     if is_auto_open_enabled():
-        open_document(doc_path)
+        # If composed live in visible WordCraft desktop mode, WordCraft is already displaying it
+        if not (wc_result is not None and getattr(wc_result, "visible_mode", False)):
+            open_document(doc_path)
+
+    return {
+        "title": title,
+        "sections": sections,
+        "doc_path": str(doc_path),
+        "wc_result": wc_result,
+        "doc_ir": doc_ir if "doc_ir" in locals() else None,
+        "section_quality": section_quality,
+        "used_hits": used_hits,
+        "decision": decision,
+        "ungrounded": ungrounded,
+    }
 
 
 def cmd_revise(revision_instruction: str):
@@ -694,11 +843,172 @@ def cmd_revise(revision_instruction: str):
     return new_path
 
 
+def _report_grounding_quality(section_quality: list[dict[str, Any]], ungrounded: list[str]) -> None:
+    """Summarise how well each section was supported by retrieved sources."""
+    if not section_quality:
+        return
+    grounded = [q for q in section_quality if q["sources"] > 0]
+    if not grounded:
+        return
+    mean_cov = sum(q["coverage"] for q in grounded) / len(grounded)
+    weak_total = sum(q["weak"] for q in grounded)
+    console.print(
+        f"[dim]🎯 Grounded {len(grounded)}/{len(section_quality)} sections · "
+        f"mean coverage {mean_cov:.2f} · {weak_total} weakly-supported sentence(s)[/dim]"
+    )
+    if ungrounded:
+        preview = ", ".join(ungrounded[:3]) + ("…" if len(ungrounded) > 3 else "")
+        console.print(
+            f"[yellow]⚠ {len(ungrounded)} section(s) had no source above threshold: "
+            f"{preview}[/yellow]"
+        )
+
+def _split_ingest_targets(arg: str) -> list[str]:
+    """Split ingestion argument into source targets.
+
+    Commas separate multiple targets while spaces belong to multi-word topics.
+    Whitespace-separated URLs are also split into individual targets.
+    """
+    arg = arg.strip()
+    if not arg:
+        return []
+
+    if "," in arg:
+        raw_parts = [p.strip() for p in arg.split(",") if p.strip()]
+    else:
+        raw_parts = [arg]
+
+    targets = []
+    for part in raw_parts:
+        words = part.split()
+        if len(words) > 1 and all(w.startswith(("http://", "https://")) for w in words):
+            targets.extend(words)
+        else:
+            targets.append(part)
+    return targets
+
+
+def cmd_ingest(arg: str, quiet: bool = False):
+    """Ingest web sources into the persistent local corpus.
+
+    Accepts URLs and bare topics: a URL is fetched directly, a topic resolves to
+    its Wikipedia article. Nothing is fetched at document-creation time, so the
+    corpus stays the single source of truth for what a document can cite.
+    """
+    from rich.table import Table
+
+    from src.doc_gen.web_researcher import WebResearcher
+
+    targets = _split_ingest_targets(arg)
+    if not targets:
+        console.print(
+            "[yellow]Please provide URLs or topics. "
+            "Example: /ingest https://en.wikipedia.org/wiki/Plant arxiv.org/abs/2301.00001[/yellow]"
+        )
+        return
+
+    from src.doc_gen.network_gate import is_webfetch_enabled
+    if not is_webfetch_enabled():
+        console.print(
+            "[yellow]Webfetch is off, so /ingest cannot download sources. "
+            "Turn it on with /settings webfetch on.[/yellow]"
+        )
+        return
+
+    corpus = get_corpus()
+    researcher = WebResearcher(timeout=20.0, throttle_seconds=1.5)
+
+    results: list[tuple[str, str, Any, str]] = []
+    with ui.create_progress() as progress:
+        task = progress.add_task("Ingesting sources into local corpus...", total=len(targets))
+
+        def _fetch_and_ingest(item: str, mode: str) -> tuple[bool, tuple[str, str, Any, str]]:
+            is_url = item.startswith(("http://", "https://"))
+            url = item if is_url else "https://en.wikipedia.org/wiki/" + item.replace(" ", "_")
+            progress.update(task, description=f"Fetching {item[:44]}…")
+            try:
+                doc = researcher.fetch_document(url)
+                result = corpus.ingest_document(
+                    url=doc["url"],
+                    text=doc["text"],
+                    title=doc["title"],
+                    license_name=doc.get("license_hint"),
+                )
+                return True, (item, mode, result, doc["title"])
+            except Exception as exc:
+                return False, (item, mode, None, str(exc)[:120])
+
+        for target in targets:
+            if target.startswith(("http://", "https://")):
+                _ok, entry = _fetch_and_ingest(target, mode="direct")
+                results.append(entry)
+            else:
+                ok, entry = _fetch_and_ingest(target, mode="direct")
+                if ok:
+                    results.append(entry)
+                else:
+                    # Backward-compatibility fallback: if multi-word topic fails
+                    # as a single Wikipedia article, try splitting on whitespace
+                    # (e.g. 'Plant Root Flower' -> 'Plant', 'Root', 'Flower').
+                    sub_pieces = target.split()
+                    err_msg = entry[3]
+                    if len(sub_pieces) > 1 and ("could not be retrieved" in err_msg.lower() or "not retrieved" in err_msg.lower()):
+                        for piece in sub_pieces:
+                            _sub_ok, sub_entry = _fetch_and_ingest(piece, mode="fallback (split)")
+                            results.append(sub_entry)
+                    else:
+                        results.append(entry)
+            progress.update(task, advance=1)
+
+    if quiet:
+        return
+
+    table = Table(title="[bold #9ece6a]✓ Corpus Ingestion Complete[/bold #9ece6a]", border_style="#414868")
+    table.add_column("Source", style="bold #7dcfff", width=24)
+    table.add_column("Mode", width=18)
+    table.add_column("Status", width=12)
+    table.add_column("Detail")
+
+    for target, mode, result, detail in results:
+        mode_styled = "[dim]direct[/dim]" if mode == "direct" else "[yellow]fallback (split)[/yellow]"
+        if result is None:
+            table.add_row(target[:24], mode_styled, "[red]failed[/red]", detail)
+        elif result.status == "ingested":
+            table.add_row(
+                target[:24],
+                mode_styled,
+                "[green]ingested[/green]",
+                f"{result.chunks} chunks · {result.words} words · {detail[:50]}",
+            )
+        elif result.status == "skipped":
+            table.add_row(target[:24], mode_styled, "[dim]skipped[/dim]", result.message)
+        else:
+            table.add_row(target[:24], mode_styled, "[yellow]failed[/yellow]", result.message)
+
+    console.print(table)
+
+    stats = corpus.stats()
+    console.print(
+        f"[dim]Corpus: {stats['sources']} source(s), {stats['chunks']} chunks, "
+        f"{stats['words']} words · retrieval: "
+        f"{'hybrid (BM25 + embeddings)' if stats['dense_available'] else 'lexical (BM25)'}"
+        f"[/dim]"
+    )
+    if not stats["dense_available"] and stats.get("dense_error"):
+        console.print(f"[dim]Embeddings unavailable, using lexical retrieval: {stats['dense_error'][:100]}[/dim]")
+
+
 def cmd_research(topic_arg: str):
     """Researches a topic across web and live sources, displaying facts and references."""
     clean_topic = topic_arg.strip()
     if not clean_topic:
         console.print("[yellow]Please specify a topic to research. Example: /research Quantum Computing[/yellow]")
+        return
+
+    from src.doc_gen.network_gate import is_webfetch_enabled
+    if not is_webfetch_enabled():
+        console.print("[yellow]Webfetch is off, so /research cannot query the web. "
+                      "Turn it on with /settings webfetch on.[/yellow]")
         return
 
     from src.doc_gen.web_researcher import WebResearcher
@@ -1128,13 +1438,21 @@ def cmd_model():
     rlcd = get_rlcd()
     llm = get_llm()
     telemetry = rlcd.get_telemetry()
+    model_info = llm.report_model()
 
     from rich.table import Table
     t = Table(title="[bold #7aa2f7]Model & Policy Telemetry[/bold #7aa2f7]", border_style="#414868")
     t.add_column("Property", style="bold #e0af68")
     t.add_column("Value")
-    t.add_row("Active Conversational Model", f"[bold #bb9af7]{llm.model_id}[/bold #bb9af7]")
-    t.add_row("Inference Device", f"[bold #9ece6a]{llm.device.upper()}[/bold #9ece6a]")
+    t.add_row("Active Conversational Model", f"[bold #bb9af7]{model_info['id']}[/bold #bb9af7]")
+    t.add_row("Parameter Count", f"[white]{model_info.get('parameter_count_str', 'n/a')}[/white]")
+    t.add_row("Precision (Dtype)", f"[white]{model_info.get('dtype', 'n/a')}[/white]")
+    t.add_row("Inference Device", f"[bold #9ece6a]{model_info['device'].upper()}[/bold #9ece6a]")
+    if model_info.get("vram_allocated_mb", 0) > 0:
+        t.add_row("VRAM Allocated / Reserved", f"{model_info['vram_allocated_mb']} MB / {model_info.get('vram_reserved_mb', 0)} MB")
+    if model_info.get("load_time_seconds", 0) > 0:
+        t.add_row("Model Load Duration", f"{model_info['load_time_seconds']:.2f}s")
+    t.add_row("Model Status", "[bold green]✓ Loaded in Memory[/bold green]" if model_info["is_loaded"] else f"[yellow]Not Loaded ({model_info.get('load_error') or 'idle'})[/yellow]")
     t.add_row("RLCD Policy Episodes", str(telemetry["episodes"]))
     t.add_row("Moving Baseline", str(telemetry["baseline"]))
     for arch, prob in telemetry["archetype_distribution"].items():
@@ -1144,9 +1462,63 @@ def cmd_model():
     console.print(t)
 
 
+def cmd_seed(arg: str = ""):
+    """Loads curated knowledge files (data/knowledge/<domain>) into the knowledge tree. No network."""
+    from src.doc_gen.knowledge_seed import data_root, load_seed
+
+    domain = (arg.strip().split() or ["aiml"])[0]
+    available = sorted(p.name for p in data_root().iterdir() if p.is_dir()) if data_root().exists() else []
+    if domain not in available:
+        console.print(f"[yellow]Unknown seed '{domain}'. Available: {', '.join(available) or 'none'}[/yellow]")
+        return
+    corpus = get_corpus()
+    with ui.spinner(f"Loading the '{domain}' knowledge seed into the local database..."):
+        result = load_seed(corpus.tree, domain)
+    stats = corpus.tree.stats()
+    console.print(
+        f"[bold green]✓ Seed '{domain}' loaded.[/bold green] "
+        f"{result['topics_added']} new topic(s), {result['facts_added']} new fact(s) from {result['files']} file(s). "
+        f"Database now holds {stats['topics']} topics and {stats['facts']} facts."
+    )
+
+
+def _webfetch_status_text() -> str:
+    from src.doc_gen.network_gate import is_webfetch_enabled, webfetch_source
+    state = "[green]On[/green]" if is_webfetch_enabled() else "[red]Off[/red] (local database only)"
+    return f"{state} [dim]source: {webfetch_source()}[/dim]"
+
+
+def cmd_webfetch(arg: str = ""):
+    """Shows or changes the webfetch toggle. Off means Filevo never touches the network."""
+    from src.doc_gen.network_gate import (
+        ENV_VAR, is_webfetch_enabled, parse_switch, set_webfetch, webfetch_source,
+    )
+    word = arg.strip().lower()
+    if word in ("", "status"):
+        console.print(f"Webfetch: {_webfetch_status_text()}")
+        return
+    if word == "toggle":
+        target = not is_webfetch_enabled()
+    else:
+        target = parse_switch(word)
+        if target is None:
+            console.print("[yellow]Usage: /settings webfetch on|off|toggle[/yellow]")
+            return
+    set_webfetch(target)
+    if webfetch_source() == "env" and is_webfetch_enabled() != target:
+        console.print(f"[yellow]Saved, but the {ENV_VAR} environment variable overrides it in this shell.[/yellow]")
+    if target:
+        console.print("[bold green]✓ Webfetch on.[/bold green] /ingest and --auto-ingest may download sources.")
+    else:
+        console.print("[bold green]✓ Webfetch off.[/bold green] Filevo will use only the local database.")
+
+
 def cmd_settings(arg: str = ""):
     """Reports configuration, commands, and environment settings. Supports toggling auto_open, engine, and mode."""
     arg_clean = arg.strip().lower()
+    if arg_clean.startswith(("webfetch", "web")):
+        cmd_webfetch(arg_clean.split(maxsplit=1)[1] if " " in arg_clean else "")
+        return
     if arg_clean:
         if arg_clean in ("auto_open off", "off", "disable", "disabled", "false", "0"):
             set_auto_open(False)
@@ -1207,6 +1579,7 @@ def cmd_settings(arg: str = ""):
     t.add_column("Current Value")
     t.add_row("Authoring Engine", f"WordCraft MCP: {wc_status} | Active: [cyan]{get_doc_engine_setting()}[/cyan] (Mode: [cyan]{get_wordcraft_mode_setting()}[/cyan])")
     t.add_row("Auto-Open Documents", f"{auto_open_status} (Toggle via /settings auto_open on|off)")
+    t.add_row("Webfetch", _webfetch_status_text() + " (Toggle via /settings webfetch on|off or W in the TUI)")
     t.add_row("Conversational Model", f"{llm.model_id} (Device: {llm.device})")
     t.add_row("Knowledge Base", f"{summary['total_documents']} indexed document(s)")
     t.add_row("Session Memory", f"{mem_diag['total_turns']} active turns, Active Topic: {mem_diag['active_topic'] or 'None'}")
@@ -1464,6 +1837,7 @@ def handle_natural_language_pipeline(user_input: str):
 
     # Step 3: Context & reference resolution (e.g. resolving "it" or follow-up instructions)
     resolved_ref = memory.resolve_references(clean_text)
+    p_lower = clean_text.lower().strip()
 
     # Open folder / directory intent
     if any(re.search(pat, p_lower) for pat in (
@@ -1543,7 +1917,8 @@ def handle_natural_language_pipeline(user_input: str):
 
     # Step 6: General conversation, explanations, questions, and acknowledgments
     question_cues = ["why", "how", "what", "explain", "describe", "tell me", "does", "difference"]
-    if any(q in p_lower for q in question_cues) or "?" in clean_text:
+    from src.doc_gen.network_gate import is_webfetch_enabled
+    if is_webfetch_enabled() and (any(q in p_lower for q in question_cues) or "?" in clean_text):
         try:
             from src.doc_gen.web_researcher import WebResearcher
             wr = WebResearcher()
@@ -1620,6 +1995,8 @@ def handle_input(raw_input: str):
             cmd_revise(arg)
         elif cmd == "/research":
             cmd_research(arg)
+        elif cmd == "/ingest":
+            cmd_ingest(arg)
         elif cmd == "/analyze":
             cmd_analyze(arg)
         elif cmd == "/train":
@@ -1641,6 +2018,10 @@ def handle_input(raw_input: str):
             cmd_wordcraft(arg)
         elif cmd == "/settings":
             cmd_settings(arg)
+        elif cmd == "/webfetch":
+            cmd_webfetch(arg)
+        elif cmd == "/seed":
+            cmd_seed(arg)
         elif cmd == "/status":
             cmd_status(arg)
         elif cmd in ("/open", "/browse", "/files"):
@@ -1749,6 +2130,12 @@ def main():
     fp = subparsers.add_parser("feedback", help="Record feedback on generation")
     fp.add_argument("reward", nargs="?", default="1.0", help="Reward value in [-1.0, +1.0]")
 
+    sdp = subparsers.add_parser("seed", help="Load curated knowledge (data/knowledge/<domain>) into the database")
+    sdp.add_argument("args", nargs="*", default=[], help="domain, default aiml")
+    igp = subparsers.add_parser("ingest", help="Fetch URLs or topics into the local database (needs webfetch on)")
+    igp.add_argument("args", nargs="+", help="URLs or topic names")
+    wfp = subparsers.add_parser("webfetch", help="Show or toggle network access (on|off|toggle)")
+    wfp.add_argument("args", nargs="*", default=[], help="on | off | toggle | status")
     stp = subparsers.add_parser("settings", help="Report or toggle settings")
     stp.add_argument("args", nargs="*", default=[], help="Setting options like auto_open on|off")
     wcp = subparsers.add_parser("wordcraft", help="WordCraft MCP engine status, tools, and actions")
@@ -1793,6 +2180,12 @@ def main():
         cmd_model()
     elif args.command == "settings":
         cmd_settings(" ".join(args.args) if hasattr(args, "args") else "")
+    elif args.command == "webfetch":
+        cmd_webfetch(" ".join(args.args))
+    elif args.command == "ingest":
+        cmd_ingest(" ".join(args.args))
+    elif args.command == "seed":
+        cmd_seed(" ".join(args.args))
     elif args.command == "status":
         cmd_status(" ".join(args.args) if hasattr(args, "args") else "")
     else:

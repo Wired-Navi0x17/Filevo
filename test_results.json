@@ -1,0 +1,93 @@
+[
+  {
+    "test": "Test A",
+    "request": "Create 5 pages about domestic cats.",
+    "doc_path": "/home/l41n-pr0t0/.filevo/output/Technical_Report_on_Domestic_Cats.docx",
+    "pages": 5,
+    "words": 927,
+    "paragraphs": 27,
+    "media_count": 0,
+    "drawing_count": 0,
+    "elapsed_sec": 6.63,
+    "archetype": "Technical Report",
+    "title": "Technical Report on Domestic Cats"
+  },
+  {
+    "test": "Test B",
+    "request": "Create 5 pages about domestic cats with at least 4 relevant images.",
+    "doc_path": "/home/l41n-pr0t0/.filevo/output/Technical_Report_on_Domestic_Cats_2.docx",
+    "pages": 5,
+    "words": 950,
+    "paragraphs": 35,
+    "media_count": 4,
+    "drawing_count": 4,
+    "elapsed_sec": 0.68,
+    "archetype": "Technical Report",
+    "title": "Technical Report on Domestic Cats"
+  },
+  {
+    "test": "Test C",
+    "request": "Create a 5 page executive briefing about the commercial use of cat imagery in advertising.",
+    "doc_path": "/home/l41n-pr0t0/.filevo/output/The_Commercial_Use_Of_Cat_Imagery_I.docx",
+    "pages": 2,
+    "words": 485,
+    "paragraphs": 17,
+    "media_count": 0,
+    "drawing_count": 0,
+    "elapsed_sec": 0.15,
+    "archetype": "Executive Summary",
+    "title": "The Commercial Use Of Cat Imagery In Advertising"
+  },
+  {
+    "test": "Test D",
+    "request": "Create a 5 page academic report about feline behaviour with relevant figures and references.",
+    "doc_path": "/home/l41n-pr0t0/.filevo/output/Academic_Monograph_Theoretical_and_.docx",
+    "pages": 4,
+    "words": 821,
+    "paragraphs": 37,
+    "media_count": 3,
+    "drawing_count": 3,
+    "elapsed_sec": 0.58,
+    "archetype": "Academic Monograph",
+    "title": "Academic Monograph: Theoretical and Empirical Analysis of Feline Behaviour"
+  },
+  {
+    "test": "Test E",
+    "request": "Create 3 pages about the history of domestic cats.",
+    "doc_path": "/home/l41n-pr0t0/.filevo/output/The_History_Of_Domestic_Cats.docx",
+    "pages": 3,
+    "words": 821,
+    "paragraphs": 31,
+    "media_count": 0,
+    "drawing_count": 0,
+    "elapsed_sec": 0.2,
+    "archetype": "Academic Monograph",
+    "title": "The History Of Domestic Cats"
+  },
+  {
+    "test": "Test F",
+    "request": "Create 5 pages about cats as a minimalist editorial document with images.",
+    "doc_path": "/home/l41n-pr0t0/.filevo/output/Cats.docx",
+    "pages": 5,
+    "words": 940,
+    "paragraphs": 33,
+    "media_count": 3,
+    "drawing_count": 3,
+    "elapsed_sec": 0.56,
+    "archetype": "Technical Report",
+    "title": "Cats"
+  },
+  {
+    "test": "Test G",
+    "request": "create 5 pages on cat with images",
+    "doc_path": "/home/l41n-pr0t0/.filevo/output/Technical_Report_on_Cat_4.docx",
+    "pages": 5,
+    "words": 926,
+    "paragraphs": 27,
+    "media_count": 0,
+    "drawing_count": 0,
+    "elapsed_sec": 0.21,
+    "archetype": "Technical Report",
+    "title": "Technical Report on Cat"
+  }
+]

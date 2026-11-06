@@ -54,10 +54,37 @@ class DocxRenderer:
         font = strategy.font_family
         accent = strategy.accent_color
 
+        # Collect any images from sections
+        images_to_embed: list[tuple[str, bytes, str]] = []  # (rel_id, bytes, ext)
+        for s_idx, sec in enumerate(sections):
+            sec_img = sec.get("image")
+            if sec_img is not None:
+                img_data = getattr(sec_img, "data", None)
+                if not img_data and hasattr(sec_img, "path") and sec_img.path:
+                    try:
+                        p = Path(sec_img.path)
+                        if p.exists():
+                            img_data = p.read_bytes()
+                    except Exception:
+                        pass
+                if not img_data and isinstance(sec_img, dict):
+                    img_data = sec_img.get("data")
+                    if not img_data and sec_img.get("path"):
+                        try:
+                            p = Path(sec_img["path"])
+                            if p.exists():
+                                img_data = p.read_bytes()
+                        except Exception:
+                            pass
+                if img_data:
+                    rel_id = f"rIdImg{len(images_to_embed) + 1}"
+                    images_to_embed.append((rel_id, img_data, "png"))
+                    sec["_rel_id"] = rel_id
+
         # Build document XML parts
-        content_types_xml = self._build_content_types_xml()
+        content_types_xml = self._build_content_types_xml(has_images=bool(images_to_embed))
         root_rels_xml = self._build_root_rels_xml()
-        doc_rels_xml = self._build_doc_rels_xml()
+        doc_rels_xml = self._build_doc_rels_xml(images_to_embed=images_to_embed)
         styles_xml = self._build_styles_xml(font, accent)
         document_xml = self._build_document_xml(title, sections, strategy, metadata=metadata)
 
@@ -68,6 +95,8 @@ class DocxRenderer:
             z.writestr("word/_rels/document.xml.rels", doc_rels_xml)
             z.writestr("word/styles.xml", styles_xml)
             z.writestr("word/document.xml", document_xml)
+            for idx, (_, data, ext) in enumerate(images_to_embed, start=1):
+                z.writestr(f"word/media/image{idx}.{ext}", data)
 
         # Validate result
         self.validate(out_path)
@@ -157,12 +186,16 @@ class DocxRenderer:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _build_content_types_xml() -> str:
-        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    def _build_content_types_xml(has_images: bool = False) -> str:
+        img_types = """    <Default Extension="png" ContentType="image/png"/>
+    <Default Extension="jpeg" ContentType="image/jpeg"/>
+    <Default Extension="jpg" ContentType="image/jpeg"/>
+""" if has_images else ""
+        return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
     <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
     <Default Extension="xml" ContentType="application/xml"/>
-    <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+{img_types}    <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
     <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 </Types>"""
 
@@ -174,10 +207,15 @@ class DocxRenderer:
 </Relationships>"""
 
     @staticmethod
-    def _build_doc_rels_xml() -> str:
-        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    def _build_doc_rels_xml(images_to_embed: list[tuple[str, bytes, str]] | None = None) -> str:
+        rels = ['    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>']
+        if images_to_embed:
+            for idx, (rel_id, _, ext) in enumerate(images_to_embed, start=1):
+                rels.append(f'    <Relationship Id="{rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image{idx}.{ext}"/>')
+        rels_str = "\n".join(rels)
+        return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+{rels_str}
 </Relationships>"""
 
     @staticmethod
@@ -460,6 +498,71 @@ class DocxRenderer:
             if table_data and strategy.include_tables:
                 body_elements.append(self._build_table_xml(table_data, accent))
 
+            # Render Image if attached to this section
+            if sec.get("_rel_id"):
+                rel_id = sec["_rel_id"]
+                sec_img = sec.get("image")
+                img_caption = getattr(sec_img, "caption", "") or (sec_img.get("caption", "") if isinstance(sec_img, dict) else "")
+                esc_caption = self._escape_xml(img_caption or f"Illustration for {sec_title}")
+                body_elements.append(f"""
+        <w:p>
+            <w:pPr>
+                <w:jc w:val="center"/>
+                <w:spacing w:before="180" w:after="80"/>
+            </w:pPr>
+            <w:r>
+                <w:drawing>
+                    <wp:inline distT="0" distB="0" distL="0" distR="0">
+                        <wp:extent cx="5029200" cy="2743200"/>
+                        <wp:effectExtent l="0" t="0" r="0" b="0"/>
+                        <wp:docPr id="{s_idx + 1}" name="Figure {s_idx + 1}"/>
+                        <wp:cNvGraphicFramePr>
+                            <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
+                        </wp:cNvGraphicFramePr>
+                        <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                            <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                                    <pic:nvPicPr>
+                                        <pic:cNvPr id="{s_idx + 1}" name="Figure_{s_idx + 1}.png"/>
+                                        <pic:cNvPicPr/>
+                                    </pic:nvPicPr>
+                                    <pic:blipFill>
+                                        <a:blip r:embed="{rel_id}"/>
+                                        <a:stretch>
+                                            <a:fillRect/>
+                                        </a:stretch>
+                                    </pic:blipFill>
+                                    <pic:spPr>
+                                        <a:xfrm>
+                                            <a:off x="0" y="0"/>
+                                            <a:ext cx="5029200" cy="2743200"/>
+                                        </a:xfrm>
+                                        <a:prstGeom prst="rect">
+                                            <a:avLst/>
+                                        </a:prstGeom>
+                                    </pic:spPr>
+                                </pic:pic>
+                            </a:graphicData>
+                        </a:graphic>
+                    </wp:inline>
+                </w:drawing>
+            </w:r>
+        </w:p>
+        <w:p>
+            <w:pPr>
+                <w:jc w:val="center"/>
+                <w:spacing w:before="40" w:after="160"/>
+            </w:pPr>
+            <w:r>
+                <w:rPr>
+                    <w:i/>
+                    <w:sz w:val="18"/>
+                    <w:color w:val="666666"/>
+                </w:rPr>
+                <w:t>Figure: {esc_caption}</w:t>
+            </w:r>
+        </w:p>""")
+
         # Page Setup (Margins)
         body_elements.append(f"""
         <w:sectPr>
@@ -469,7 +572,11 @@ class DocxRenderer:
 
         xml_body = "\n".join(body_elements)
         return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
     <w:body>
 {xml_body}
     </w:body>

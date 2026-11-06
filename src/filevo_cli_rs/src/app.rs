@@ -188,6 +188,21 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Researches live web sources",
     },
     CommandSpec {
+        name: "/ingest",
+        usage: "/ingest <url|topic> ...",
+        description: "Fetches sources into the local database (needs webfetch on)",
+    },
+    CommandSpec {
+        name: "/seed",
+        usage: "/seed [aiml]",
+        description: "Loads curated knowledge into the local database (offline)",
+    },
+    CommandSpec {
+        name: "/webfetch",
+        usage: "/webfetch [on|off|toggle]",
+        description: "Shows or toggles network access; off = local database only (Ctrl+G)",
+    },
+    CommandSpec {
         name: "/analyze",
         usage: "/analyze [path]",
         description: "Analyzes a document or codebase",
@@ -972,6 +987,16 @@ impl App {
     pub fn open_document_path(&mut self, path: &std::path::Path) {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/l41n-pr0t0".to_string());
         let wc = std::path::PathBuf::from(home).join(".local/bin/wordcraft");
+
+        // If WordCraft is already running on control port 7981, do not launch a duplicate window
+        if let Ok(addr) = "127.0.0.1:7981".parse() {
+            if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(150)).is_ok() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("document");
+                self.toast(format!("WordCraft is already active with {name}"), ToastKind::Info);
+                return;
+            }
+        }
+
         let spawned = if wc.exists() {
             std::process::Command::new(wc).arg(path).spawn()
         } else {
@@ -1167,6 +1192,9 @@ impl App {
         }
         if ctrl && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R')) {
             return AppAction::RequestDashboard;
+        }
+        if ctrl && matches!(key.code, KeyCode::Char('g') | KeyCode::Char('G')) {
+            return self.toggle_webfetch();
         }
         if key.code == KeyCode::F(1) {
             self.view = View::Help;
@@ -1673,6 +1701,32 @@ impl App {
                     "Researching live sources",
                 )
             }
+            "/ingest" => {
+                if argument.is_empty() {
+                    self.error_message("Usage: /ingest <url|topic> ...");
+                    return AppAction::None;
+                }
+                let mut args = vec!["ingest".to_string()];
+                args.extend(argument.split_whitespace().map(str::to_string));
+                self.run_conversation_command(args, "Ingesting sources into the local database")
+            }
+            "/seed" => {
+                let domain = if argument.is_empty() { "aiml" } else { argument };
+                self.run_conversation_command(
+                    vec!["seed".to_string(), domain.to_string()],
+                    "Loading knowledge seed",
+                )
+            }
+            "/webfetch" => {
+                let word = if argument.is_empty() { "status" } else { argument };
+                if word != "status" {
+                    self.optimistic_webfetch(word);
+                }
+                self.run_conversation_command(
+                    vec!["webfetch".to_string(), word.to_string()],
+                    "Updating webfetch setting",
+                )
+            }
             "/analyze" => {
                 let path = if argument.is_empty() { "." } else { argument };
                 self.run_conversation_command(
@@ -1741,6 +1795,14 @@ impl App {
                     cancel,
                 })
             }
+            "/settings" if !argument.is_empty() => {
+                let mut args = vec!["settings".to_string()];
+                args.extend(argument.split_whitespace().map(str::to_string));
+                if let Some(rest) = argument.strip_prefix("webfetch") {
+                    self.optimistic_webfetch(rest.trim());
+                }
+                self.run_conversation_command(args, "Updating settings")
+            }
             "/settings" => {
                 self.view = View::Settings;
                 self.active_tab = NavTab::Settings;
@@ -1771,6 +1833,37 @@ impl App {
                 AppAction::None
             }
         }
+    }
+
+    /// Flip network access. The backend persists it in ~/.filevo/config.json;
+    /// the status badge updates at once and is confirmed by the next dashboard.
+    pub fn toggle_webfetch(&mut self) -> AppAction {
+        let target = if self.dashboard.telemetry.web.enabled { "off" } else { "on" };
+        self.optimistic_webfetch(target);
+        self.toast(
+            format!("Webfetch {}", target.to_uppercase()),
+            ToastKind::Info,
+        );
+        if self.demo {
+            return AppAction::None;
+        }
+        let (task_id, cancel) = self.begin_task(PendingKind::ConversationCommand, "Updating webfetch setting");
+        AppAction::Send(Request::Python {
+            task_id,
+            args: vec!["webfetch".to_string(), target.to_string()],
+            cancel,
+        })
+    }
+
+    fn optimistic_webfetch(&mut self, word: &str) {
+        let web = &mut self.dashboard.telemetry.web;
+        match word.trim() {
+            "on" | "1" | "true" | "enable" => web.enabled = true,
+            "off" | "0" | "false" | "disable" => web.enabled = false,
+            "toggle" => web.enabled = !web.enabled,
+            _ => return,
+        }
+        web.last_result = if web.enabled { "idle".to_string() } else { "disabled".to_string() };
     }
 
     fn run_conversation_command(&mut self, args: Vec<String>, label: &str) -> AppAction {

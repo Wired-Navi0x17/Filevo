@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/filevo-decision",
+    "crates/filevo-spec",
     "crates/filevo-docx",
     "crates/filevo-inference",
     "crates/filevo-memory",
@@ -8,6 +10,7 @@ members = [
     "crates/filevo-policy",
     "crates/filevo-store",
     "crates/filevo-core",
+    "crates/filevo-rlcd",
     "src/filevo_cli_rs",
 ]
 

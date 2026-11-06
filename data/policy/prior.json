@@ -1,0 +1,17 @@
+{
+  "_comment": "Starting weights for the RLCD tree policy. These are only a prior: REINFORCE updates move them, and learned values in ~/.filevo/policy/rlcd_tree.json always win over this file.",
+  "genre": {"weights": {"sim_description": 14.0, "pages_fit": 2.0}},
+  "theme": {"weights": {"sim_description": 8.0,
+    "pair:study_guide|classic_serif": 1.5, "pair:monograph|classic_serif": 1.5,
+    "pair:technical_report|modern_sans": 1.5, "pair:briefing|modern_sans": 1.5,
+    "pair:reference_sheet|compact_reference": 3.0}},
+  "include_topic": {"weights": {"bias": -4.0, "relevance": 10.0, "is_match": 2.0, "match_score": 2.0,
+    "budget_left": 3.0, "depth": -1.5, "prereq_of_match": 1.0, "title_overlap": 2.0}},
+  "expand_children": {"weights": {"bias": 1.0, "budget_left": 3.0, "depth": -2.0, "detail": 1.0, "relevance": 2.0}},
+  "detail": {"weights": {"budget_left": 1.5, "relevance": 2.0}, "thresholds": [0.6, 2.2]},
+  "include_fact": {"weights": {"bias": -7.0, "relevance": 3.0, "support": 1.0, "genre_pref": 7.0,
+    "first_of_kind": 1.5, "kind_repeat": -1.0, "budget_left": 5.0, "detail": 1.0, "kind_cue": 4.0}},
+  "gate:toc": {"weights": {"bias": -2.0, "n_topics": 1.5, "genre:reference_sheet": -3.0, "genre:briefing": -1.5}},
+  "gate:cover": {"weights": {"bias": -1.0, "planned_frac": 2.0, "n_topics": 0.5, "genre:reference_sheet": -3.0}},
+  "gate:references": {"weights": {"bias": 3.0}}
+}

@@ -13,6 +13,17 @@ from typing import Any
 
 
 @dataclass
+class MediaRequirements:
+    """Explicit media and illustration requirements extracted from request."""
+
+    has_images: bool = False
+    count: int = 0
+    kinds: list[str] = field(default_factory=list)
+    captions_requested: bool = True
+    raw_clause: str = ""
+
+
+@dataclass
 class PlannedSection:
     """Internal contract for an individual document section."""
 
@@ -26,6 +37,7 @@ class PlannedSection:
     visual_element: str | None = None  # "comparison_table", "workflow_sequence", "testing_matrix", None
     expected_paragraphs: int = 2
     page_break_before: bool = False
+    image: Any | None = None
 
 
 @dataclass
@@ -50,6 +62,26 @@ class DocumentPlan:
     needs_external_research: bool = False
     is_offline_fallback: bool = False
     target_pages: int | None = None
+    document_subject: str = ""
+    document_type: str = ""
+    document_purpose: str = ""
+    intended_audience: str = ""
+    presentation_profile: str = ""
+    explicit_requirements: list[str] = field(default_factory=list)
+    media_requirements: MediaRequirements = field(default_factory=MediaRequirements)
+    acquired_images: list[Any] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.document_subject:
+            self.document_subject = self.topic
+        if not self.document_type:
+            self.document_type = self.genre
+        if not self.document_purpose:
+            self.document_purpose = self.purpose
+        if not self.intended_audience:
+            self.intended_audience = self.audience
+        if not self.presentation_profile:
+            self.presentation_profile = self.genre
 
     @property
     def required_sections(self) -> list[str]:
@@ -74,6 +106,8 @@ class DocumentPlan:
         explicit_sections: list[str] | None = None,
         web_sources: list[dict[str, Any]] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        title: str | None = None,
+        client: Any | None = None,
     ) -> DocumentPlan:
         """Autonomously architect a complete DocumentPlan from user objective with self-healing validation."""
         clean_req = user_request.strip()
@@ -90,11 +124,12 @@ class DocumentPlan:
 
         # Step 2: Genre, Tone, and Audience Determination
         genre, tone, audience = infer_genre_and_audience(clean_req_semantic, subject, fallback_archetype=archetype, directive=directive)
-        if target_pages and target_pages >= 30 and genre in ("Technical Report", "Comprehensive Guide") and not directive:
+        if target_pages and target_pages >= 30 and genre == "Technical Report" and not directive:
             genre = "Academic Monograph" if any(w in clean_req.lower() for w in ("monograph", "academic", "research", "study")) else genre
 
         # Step 3: Semantic Title Synthesis (guaranteed non-placeholder)
-        title = synthesize_title(subject, genre, directive=directive, target_pages=target_pages)
+        if not title or any(p in title.lower() for p in PLACEHOLDER_BLACKLIST):
+            title = synthesize_title(subject, genre, directive=directive, target_pages=target_pages)
         topic = subject
 
         if explicit_sections is None:
@@ -139,7 +174,7 @@ class DocumentPlan:
                     visual_elements.append(vis)
         else:
             planned_sections, visual_elements = plan_domain_sections(
-                subject, genre, topic, hardware_items, workflows, target_pages=target_pages, directive=directive
+                subject, genre, topic, hardware_items, workflows, target_pages=target_pages, directive=directive, client=client
             )
 
         # Step 5: Technical Concepts & Context Invariants
@@ -160,6 +195,31 @@ class DocumentPlan:
             "Complete sentences with proper terminal punctuation",
             "Non-destructive versioning without overwriting previous artifacts",
         ]
+
+        # Step 4b: Extract Media Requirements and Acquire Images
+        media_req, _ = extract_media_requirements(clean_req)
+        acquired_images = []
+        image_acquisition_diagnostic = None
+        if media_req.has_images:
+            try:
+                from src.doc_gen.image_fetcher import get_image_fetcher
+                fetcher = get_image_fetcher()
+                req_count = media_req.count if media_req.count > 0 else 3
+                acquired_images = fetcher.acquire_images(
+                    subject=topic,
+                    count=req_count,
+                )
+            except Exception as e:
+                image_acquisition_diagnostic = str(e)
+                acquired_images = []
+
+        # Distribute acquired images across planned sections (1 per section where appropriate)
+        if acquired_images and planned_sections:
+            img_idx = 0
+            for sec in planned_sections:
+                if img_idx < len(acquired_images):
+                    sec.image = acquired_images[img_idx]
+                    img_idx += 1
 
         evidence: list[dict[str, Any]] = []
         if web_sources:
@@ -190,6 +250,14 @@ class DocumentPlan:
             needs_external_research=bool(web_sources),
             is_offline_fallback=False,
             target_pages=target_pages,
+            document_subject=topic,
+            document_type=genre,
+            document_purpose=purpose,
+            intended_audience=audience,
+            presentation_profile=genre,
+            explicit_requirements=[],
+            media_requirements=media_req,
+            acquired_images=acquired_images,
         )
 
         # Step 6: Deterministic Validation Gate & Autonomous Recovery
@@ -329,14 +397,84 @@ def extract_per_page_directive(raw_request: str) -> tuple[dict[str, Any] | None,
     return None, raw_request
 
 
+def extract_media_requirements(raw_request: str) -> tuple[MediaRequirements, str]:
+    """
+    Extract explicit media and illustration requirements from request.
+    Handles patterns like:
+    - 'with images'
+    - 'with at least 4 relevant images'
+    - 'with figures and references'
+    - 'including 3 photos'
+    - 'with illustrations'
+    Returns (MediaRequirements, cleaned_request).
+    """
+    media_req = MediaRequirements()
+    text = raw_request
+
+    # Check for quantitative image clauses: 'with at least 4 relevant images', 'with 3 photos'
+    num_pattern = re.compile(
+        r"(?:,\s*)?(?:\b(?:and\s+)?(?:with\s+|including\s+|having\s+)?)?"
+        r"(?:at\s+least\s+|up\s+to\s+|approx(?:\.|imately)?\s+)?(?P<count>\d+)\s+"
+        r"(?:relevant\s+|high-quality\s+|authentic\s+)?"
+        r"(?P<kind>images?|pictures?|photos?|figures?|illustrations?|diagrams?)"
+        r"(?:\s+(?:and|with)\s+(?P<extra>references?|citations?|sources?))?",
+        flags=re.IGNORECASE,
+    )
+    m = num_pattern.search(text)
+    if m:
+        media_req.has_images = True
+        try:
+            media_req.count = int(m.group("count"))
+        except (ValueError, TypeError):
+            media_req.count = 2
+        kind = m.group("kind").lower()
+        media_req.kinds = [kind]
+        media_req.raw_clause = m.group(0).strip()
+        text = num_pattern.sub("", text).strip()
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"\s*,\s*$", "", text).strip()
+        return media_req, text
+
+    # Check for qualitative image clauses: 'with images', 'with relevant figures and references', 'with photos'
+    qual_pattern = re.compile(
+        r"(?:,\s*)?(?:\b(?:and\s+)?(?:with\s+|including\s+|containing\s+))"
+        r"(?:relevant\s+|high-quality\s+|authentic\s+)?"
+        r"\b(?P<kind>images?|pictures?|photos?|figures?|illustrations?)\b"
+        r"(?:\s+(?:and|with)\s+(?P<extra>references?|citations?|sources?))?",
+        flags=re.IGNORECASE,
+    )
+    m2 = qual_pattern.search(text)
+    if m2:
+        media_req.has_images = True
+        media_req.count = 3  # default reasonable figure allocation
+        kind = m2.group("kind").lower()
+        media_req.kinds = [kind]
+        media_req.raw_clause = m2.group(0).strip()
+        text = qual_pattern.sub("", text).strip()
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"\s*,\s*$", "", text).strip()
+        return media_req, text
+
+    return media_req, text
+
+
 def extract_semantic_subject(clean_req: str) -> str:
     """Extract core semantic topic/subject from arbitrary user requests without brittle keyword lists."""
     _, req = extract_page_budget(clean_req.strip())
     _, req = extract_per_page_directive(req)
+    _, req = extract_media_requirements(req)
 
     # 1. Remove explicit section constraints clause
     req = re.sub(
         r"(?:specifying|with sections?|including sections?|sections?:|covering sections?)\s+.*$",
+        "",
+        req,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # 1b. Remove stylistic suffix constraints like 'as a minimalist editorial document', 'in corporate format'
+    req = re.sub(
+        r"(?:,\s*)?\bas\s+(?:a\s+|an\s+)?(?:minimalist\s+editorial|minimalist|editorial|formal|academic|corporate|technical)\s+(?:document|report|brief|style|format)\b.*$",
         "",
         req,
         flags=re.IGNORECASE,
@@ -347,7 +485,7 @@ def extract_semantic_subject(clean_req: str) -> str:
         r"^(?:please\s+)?(?:can\s+you\s+)?(?:i\s+want\s+(?:to\s+)?|i\s+need\s+(?:a\s+)?)?"
         r"(?:create|generate|write|draft|build|make|prepare|produce|compile|synthesize)?\s*"
         r"(?:a\s+|an\s+|the\s+)?"
-        r"(?:technical\s+report|formal\s+letter|project\s+proposal|project\s+pitch|pitch|academic\s+monograph|executive\s+summary|comprehensive\s+guide|detailed\s+guide|overview|guide|docx|document|report|paper|brief|study|essay)?"
+        r"(?:technical\s+report|formal\s+letter|project\s+proposal|project\s+pitch|pitch|academic\s+monograph|academic\s+report|executive\s+summary|executive\s+briefing|comprehensive\s+guide|detailed\s+guide|overview|guide|docx|document|report|paper|brief|study|essay)?"
         r"(?:\s+(?:on|about|for|regarding|covering|of|with))?\s*",
         "",
         req,
@@ -357,14 +495,15 @@ def extract_semantic_subject(clean_req: str) -> str:
     # 3. Strip file extension if appended
     cleaned = re.sub(r"\.(docx|pdf|txt)$", "", cleaned, flags=re.IGNORECASE).strip()
 
-    # 4. Strip leftover prepositions
+    # 4. Strip leftover prepositions & trailing media references
     cleaned = re.sub(r"^(?:on|about|for|regarding|covering|of|with)\s+", "", cleaned, flags=re.IGNORECASE).strip()
     cleaned = re.sub(r"\s+(?:on|about|for|regarding|covering|of|with)$", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\s+(?:with\s+images?|with\s+figures?|with\s+photos?)$", "", cleaned, flags=re.IGNORECASE).strip()
 
     if not cleaned or len(cleaned) < 2:
         cleaned = req
 
-    return cleaned
+    return clean_subject(cleaned)
 
 
 def extract_domain_hardware(clean_req: str) -> list[str]:
@@ -409,33 +548,103 @@ def extract_domain_workflows(clean_req: str) -> list[str]:
     return workflows
 
 
+CANONICAL_ARCHETYPES = {
+    "Technical Report": ("professional and analytical", "Domain practitioners, engineers, and technical evaluators"),
+    "Academic Monograph": ("scholarly and rigorous", "Academic researchers, faculty, and peer reviewers"),
+    "Project Proposal": ("persuasive and analytical", "Executive leadership, evaluators, and project sponsors"),
+    "Executive Summary": ("concise, strategic, and decision-oriented", "C-suite executives, senior leadership, and board members"),
+    "Formal Letter": ("formal and respectful", "Administrative review board and institutional authorities"),
+    "Informative Editorial": ("engaging, authoritative, and educational", "General educated readership, domain enthusiasts, and students"),
+    "Minimalist Editorial": ("understated, elegant, and focused", "Discerning readership and design-conscious audiences"),
+}
+
+LEGACY_ARCHETYPE_ALIASES = {
+    "Engineering Report": "Technical Report",
+    "Comprehensive Guide": "Informative Editorial",
+    "Executive Briefing": "Executive Summary",
+    "Technical Briefing": "Technical Report",
+}
+
+
 def infer_genre_and_audience(clean_req: str, subject: str, fallback_archetype: str = "Technical Report", directive: dict[str, Any] | None = None) -> tuple[str, str, str]:
-    """Determine genre, tone, and audience from request, extracted subject, and optional directive."""
+    """Determine genre, tone, and audience from request, extracted subject, and optional directive.
+
+    Enforces intent fidelity: Never chooses Executive Summary unless explicit executive signals exist.
+    """
     req_lower = clean_req.lower()
-    sub_lower = subject.lower()
 
     if directive and directive.get("is_per_page"):
         entity = directive.get("entity_type", "entity")
         return f"{entity.title()} Dossier Compendium", "authoritative, biographical, and descriptive", "Domain researchers, enthusiasts, and general readership"
-    elif any(w in req_lower for w in ("letter", "application", "permission", "formal request")):
-        return "Formal Letter", "formal and respectful", "Administrative review board and institutional authorities"
+
+    # Explicit user request takes absolute priority
+    has_exec_intent = any(w in req_lower for w in ("executive", "exec summary", "briefing", "c-suite", "board", "commercial use", "business case"))
+    has_academic_intent = any(w in req_lower for w in ("academic", "monograph", "thesis", "research paper", "scholarly", "mathematical", "history of"))
+    has_minimalist_intent = any(w in req_lower for w in ("minimalist", "minimalist editorial"))
+    has_editorial_intent = any(w in req_lower for w in ("editorial", "magazine", "essay", "informative"))
+
+    if has_minimalist_intent:
+        genre = "Minimalist Editorial"
+        tone, audience = CANONICAL_ARCHETYPES[genre]
+        return genre, tone, audience
+
+    if has_academic_intent:
+        genre = "Academic Monograph"
+        tone, audience = CANONICAL_ARCHETYPES[genre]
+        return genre, tone, audience
+
+    if has_exec_intent:
+        genre = "Executive Summary"
+        tone, audience = CANONICAL_ARCHETYPES[genre]
+        return genre, tone, audience
+
+    # If fallback_archetype was supplied (e.g. from RLCD decision):
+    # Guard against unprompted Executive Summary bias
+    if fallback_archetype:
+        resolved = LEGACY_ARCHETYPE_ALIASES.get(fallback_archetype, fallback_archetype)
+        if resolved == "Executive Summary" and not has_exec_intent:
+            # Overruled: Executive summary requested by policy without prompt justification
+            # For general informative / nature / humanities / science subjects, default to Informative Editorial
+            if any(w in subject.lower() for w in ("animal", "biology", "nature", "history", "guide", "art", "humanities", "philosophy", "culture", "literature", "editorial", "overview")):
+                resolved = "Informative Editorial"
+            else:
+                resolved = "Technical Report"
+        if resolved in CANONICAL_ARCHETYPES:
+            tone, audience = CANONICAL_ARCHETYPES[resolved]
+            return resolved, tone, audience
+
+    # Heuristic inference when no archetype is supplied
+    if any(w in req_lower for w in ("letter", "application", "permission", "formal request")):
+        genre = "Formal Letter"
     elif any(w in req_lower for w in ("proposal", "business case", "project pitch", "grant", "funding")):
-        return "Project Proposal", "persuasive and analytical", "Executive leadership, evaluators, and project sponsors"
-    elif any(w in req_lower for w in ("academic", "monograph", "thesis", "research paper", "scholarly", "mathematical")):
-        return "Academic Monograph", "scholarly and rigorous", "Academic researchers, faculty, and peer reviewers"
-    elif any(w in req_lower for w in ("spec", "specification", "telemetry", "iot", "sensor", "hardware", "engineering", "microcontroller", "embedded")):
-        return "Engineering Report", "authoritative and analytical", "Engineering students, system architects, and technical reviewers"
-    elif any(w in req_lower for w in ("guide", "manual", "handbook", "encyclopedia", "overview")) or any(w in sub_lower for w in ("animal", "marine", "sea", "ocean", "nature", "biology", "history", "geology", "forest", "wildlife", "fauna", "flora")):
-        return "Comprehensive Guide", "informative and structured", "General readers, domain educators, and research specialists"
-    elif fallback_archetype and fallback_archetype not in ("Technical Report", "Executive Summary", "Executive Briefing"):
-        return fallback_archetype, "professional and analytical", "Domain practitioners, engineers, and technical evaluators"
+        genre = "Project Proposal"
+    elif any(w in subject.lower() for w in ("animal", "biology", "wildlife", "plant", "nature", "history", "art", "humanities", "culture", "overview", "editorial", "guide")):
+        genre = "Informative Editorial"
     else:
-        return "Technical Report", "professional and analytical", "Domain practitioners, engineers, and technical evaluators"
+        genre = "Technical Report"
+
+    tone, audience = CANONICAL_ARCHETYPES[genre]
+    return genre, tone, audience
+
+
+def clean_subject(text: str) -> str:
+    """Collapse punctuation debris left behind by request parsing.
+
+    Stripping a page budget ("..., 60 pages, ...") can leave doubled commas and
+    trailing separators, which then leak into document titles and section
+    headings (``... of Encyclopedia Of Plants,``).
+    """
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s*,\s*", ", ", text)
+    text = re.sub(r"(?:,\s*)+", ", ", text)
+    text = re.sub(r"\s*([.;:])\s*$", "", text)
+    text = re.sub(r"[,;:\-\s]+$", "", text)
+    return text.strip()
 
 
 def synthesize_title(subject: str, genre: str, directive: dict[str, Any] | None = None, target_pages: int | None = None) -> str:
     """Synthesize an accurate, professional representation title strictly grounded in the subject."""
-    clean_sub = subject.strip()
+    clean_sub = clean_subject(subject)
 
     if directive and directive.get("entity_type"):
         entity_name = directive["entity_type"].title()
@@ -445,26 +654,28 @@ def synthesize_title(subject: str, genre: str, directive: dict[str, Any] | None 
 
     words = clean_sub.split()
     # If the user already provided a multi-word descriptive title, preserve it if clean
-    if len(words) >= 4 and not any(w in clean_sub.lower() for w in ("create", "write", "docx", "document", "each page", "differe")):
+    if len(words) >= 3 and not any(w in clean_sub.lower() for w in ("create", "write", "docx", "document", "each page", "differe")):
         return clean_sub.title()
 
     sub_title = clean_sub.title()
     if genre.endswith("Compendium") or "Dossier" in genre:
         return f"{sub_title}: Comprehensive Reference Compendium"
-    elif genre == "Comprehensive Guide":
-        return f"{sub_title}: A Comprehensive Guide and Overview"
+    elif genre in ("Comprehensive Guide", "Informative Editorial"):
+        return f"{sub_title}: Overview and Reference Guide"
+    elif genre == "Minimalist Editorial":
+        return f"{sub_title}"
     elif genre == "Engineering Report":
-        return f"Technical Report on {sub_title}"
+        return f"{sub_title}: Engineering and Technical Analysis"
     elif genre == "Project Proposal":
         return f"Project Proposal: {sub_title}"
     elif genre == "Academic Monograph":
-        return f"Academic Monograph: Theoretical and Empirical Analysis of {sub_title}"
+        return f"{sub_title}: Principles, Analysis, and Foundations"
     elif genre == "Formal Letter":
         return f"Formal Application Concerning {sub_title}"
     elif genre == "Executive Summary":
         return f"Executive Briefing: {sub_title}"
     else:
-        return f"Technical Report on {sub_title}"
+        return f"{sub_title}: Technical Analysis and Specifications"
 
 
 def to_roman(n: int) -> str:
@@ -510,7 +721,7 @@ def generate_universal_monograph_sections(
     directive: dict[str, Any] | None = None,
 ) -> tuple[list[PlannedSection], list[str]]:
     """Generates exactly target_count structured sections for any topic, guaranteeing exact page budgeting."""
-    clean_topic = topic.strip().title()
+    clean_topic = clean_subject(topic).title()
     planned_sections: list[PlannedSection] = []
     visual_elements = ["taxonomic_matrix", "system_architecture_diagram", "comparative_evaluation", "workflow_sequence", "testing_matrix"]
 
@@ -523,7 +734,11 @@ def generate_universal_monograph_sections(
         cycle = (i // num_facets) + 1
         part_suffix = f" (Part {cycle})" if cycle > 1 else ""
 
-        heading = f"Chapter {r}: {facet_name} of {clean_topic}{part_suffix}"
+        # Keep the heading to the analytical facet only. Repeating the document
+        # title in all 60 headings makes the artifact unreadable and dilutes the
+        # retrieval signal; the topic still reaches both `purpose` and
+        # `required_concepts`, which are what retrieval queries are built from.
+        heading = f"Chapter {r}: {facet_name}{part_suffix}"
         purpose = f"{facet_purpose} Specifically contextualized for {clean_topic}."
         vis = visual_elements[i % len(visual_elements)]
 
@@ -552,15 +767,16 @@ def plan_domain_sections(
     workflows: list[str],
     target_pages: int | None = None,
     directive: dict[str, Any] | None = None,
+    client: Any | None = None,
 ) -> tuple[list[PlannedSection], list[str]]:
     """Architect domain-coherent sections based on the semantic nature of the subject, genre, and page budget."""
-    clean_topic = topic.strip().title() if topic else subject.strip().title()
+    clean_topic = clean_subject(topic).title() if topic else clean_subject(subject).title()
 
     # 1. Page-budgeted multi-chapter monograph / treatise (for ANY topic when target_pages >= 8)
     if target_pages is not None and target_pages >= 8:
         return generate_universal_monograph_sections(clean_topic, target_pages, genre=genre, directive=directive)
 
-    # 2. Formal Letter
+    # 2. Formal Letter (Strict contractual structure)
     if genre == "Formal Letter":
         planned_sections = [
             PlannedSection("sec_1", "Formal Salutation and Recipient", "Establish formal greeting, date, and recipient identification.", representation="prose"),
@@ -571,7 +787,18 @@ def plan_domain_sections(
         ]
         return planned_sections, []
 
-    # 3. Project Proposal
+    # 3. Executive Summary (Strict contractual structure)
+    if genre == "Executive Summary":
+        visual_elements = ["executive_kpi_dashboard", "risk_matrix"]
+        planned_sections = [
+            PlannedSection("sec_1", "Strategic Context", f"Strategic drivers, background, and business context for {clean_topic}.", detail_level="standard"),
+            PlannedSection("sec_2", "Key Findings", f"Core operational outcomes, empirical observations, and performance metrics for {clean_topic}.", representation="table", detail_level="deep", visual_element="executive_kpi_dashboard"),
+            PlannedSection("sec_3", "Risk Exposure", f"Critical risk vectors, operational vulnerabilities, and regulatory exposure for {clean_topic}.", representation="table", detail_level="standard", visual_element="risk_matrix"),
+            PlannedSection("sec_4", "Strategic Recommendations", f"Actionable recommendations, immediate decisions, and forward roadmap for {clean_topic}.", representation="procedural_steps", detail_level="standard"),
+        ]
+        return planned_sections, visual_elements
+
+    # 4. Project Proposal (Strict contractual structure)
     if genre == "Project Proposal":
         visual_elements = ["implementation_timeline", "resource_matrix"]
         planned_sections = [
@@ -584,22 +811,41 @@ def plan_domain_sections(
         ]
         return planned_sections, visual_elements
 
-    # 4. Academic Monograph / In-Depth Study
-    if genre == "Academic Monograph":
-        visual_elements = ["methodology_flowchart", "comparative_evaluation", "system_architecture_diagram"]
-        planned_sections = [
-            PlannedSection("sec_1", "Abstract and Executive Summary", f"Rigorous scholarly synopsis of {clean_topic}.", detail_level="standard"),
-            PlannedSection("sec_2", "Introduction and Theoretical Foundations", f"Problem formulation and research scope for {clean_topic}.", detail_level="standard"),
-            PlannedSection("sec_3", "Related Work and Literature Analysis", "Critical review of existing paradigms and prior findings.", detail_level="deep"),
-            PlannedSection("sec_4", "Formal System Design and Methodology", "Mathematical formulation and analytical framework.", representation="procedural_steps", detail_level="deep", visual_element="methodology_flowchart"),
-            PlannedSection("sec_5", "Experimental Validation and Protocol", "Empirical testing procedures and comparative analysis.", representation="table", detail_level="deep", visual_element="comparative_evaluation"),
-            PlannedSection("sec_6", "Discussion and Critical Limitations", "Boundary analysis, failure modes, and theoretical implications.", detail_level="standard"),
-            PlannedSection("sec_7", "Conclusion and Future Research Directions", "Summary of contributions and open questions.", detail_level="standard"),
-        ]
-        return planned_sections, visual_elements
+    # 5. Dynamic LLM-driven Section Planning (Tier 1: Bespoke domain outline)
+    if client and getattr(client, "_is_loaded", False):
+        dynamic_secs = client.plan_topic_sections(
+            topic=clean_topic,
+            archetype=genre,
+            target_pages=target_pages or 1,
+            directive=directive,
+        )
+        if dynamic_secs and len(dynamic_secs) >= 3:
+            planned = []
+            for idx, s in enumerate(dynamic_secs):
+                h = s["heading"]
+                p = s["purpose"]
+                s_low = h.lower()
+                vis = "evaluation_matrix" if any(k in s_low for k in ("evaluat", "metric", "matrix", "benchmark")) else None
+                rep = "procedural_steps" if any(k in s_low for k in ("method", "workflow", "process", "protocol", "step", "phase")) else "prose"
+                depth = "deep" if idx in (1, 2) or any(k in s_low for k in ("architect", "mechanic", "analys", "principle")) else "standard"
+                planned.append(
+                    PlannedSection(
+                        id=f"sec_{idx + 1}",
+                        heading=h,
+                        purpose=p,
+                        detail_level=depth,
+                        representation=rep,
+                        visual_element=vis,
+                        page_break_before=(target_pages is not None and target_pages > 3 and idx > 0 and idx % 2 == 0),
+                    )
+                )
+            vis_list = ["system_architecture_diagram", "evaluation_matrix"] if genre == "Technical Report" else ["taxonomic_matrix", "comparative_evaluation"]
+            return planned, vis_list
 
-    # 5. Comprehensive Guide / Natural Sciences / Biological Compendium
-    if genre == "Comprehensive Guide" or any(w in clean_topic.lower() for w in ("animal", "marine", "plant", "nature", "biology", "wildlife", "species", "fauna", "flora")):
+    # 6. Domain-Adaptive Universal Fallback Architectures (Tier 2: Offline / Fallback)
+
+    # 6a. Natural Sciences, Biology, Ecology, and Organisms
+    if any(w in clean_topic.lower() for w in ("animal", "marine", "plant", "nature", "biology", "wildlife", "species", "fauna", "flora", "ecolog", "organism", "zoology", "botany", "feline", "canine", "cat", "dog", "forest")):
         visual_elements = ["taxonomic_matrix", "comparative_evaluation"]
         planned_sections = [
             PlannedSection("sec_1", f"Introduction and Evolutionary Overview of {clean_topic}", f"Foundations, evolutionary history, and general characteristics of {clean_topic}.", detail_level="standard"),
@@ -612,8 +858,8 @@ def plan_domain_sections(
         ]
         return planned_sections, visual_elements
 
-    # 6. Engineering Report (Hardware / Embedded / IoT / Telemetry)
-    if genre == "Engineering Report":
+    # 6b. Hardware / Embedded / IoT / Telemetry Engineering Specialization
+    if hardware_items or workflows or any(w in clean_topic.lower() for w in ("iot", "esp32", "sensor", "telemetry", "embedded", "hardware", "firmware", "circuit")):
         visual_elements = ["system_architecture_diagram", "evaluation_matrix"]
         planned_sections = [
             PlannedSection("sec_1", "Executive Summary", f"Executive synthesis of {clean_topic}.", detail_level="standard"),
@@ -681,16 +927,38 @@ def plan_domain_sections(
         )
         return planned_sections, visual_elements
 
-    # 6. General Technical Report Architecture (Default Fallback)
-    visual_elements = ["system_architecture_diagram", "evaluation_matrix"]
+    # 6c. Humanities, History, Arts, Architecture, and Social Sciences
+    if any(w in clean_topic.lower() for w in ("art", "history", "roman", "renaissance", "gothic", "architecture", "literature", "philosophy", "culture", "music", "humanities", "cinema", "society", "civilization", "archaeolog", "monograph")):
+        visual_elements = ["taxonomic_matrix", "comparative_evaluation"]
+        planned_sections = [
+            PlannedSection("sec_1", f"Historical Context and Cultural Foundations of {clean_topic}", f"Foundational origins, intellectual movements, and historical context of {clean_topic}.", detail_level="standard"),
+            PlannedSection("sec_2", f"Core Principles, Stylistic Movements, and Structural Innovations", f"Theoretical principles, aesthetic and structural innovations, and defining characteristics.", detail_level="deep", visual_element="taxonomic_matrix"),
+            PlannedSection("sec_3", f"Seminal Works, Regional Centers, and Influential Figures", f"Prominent masterpieces, regional divergence, and influential practitioners shaping {clean_topic}.", detail_level="deep"),
+            PlannedSection("sec_4", f"Critical Perspectives, Techniques, and Analytical Methodologies", f"Analytical paradigms, craftsmanship techniques, and contemporary critical evaluations.", detail_level="deep"),
+            PlannedSection("sec_5", f"Cultural Dispersal, Modern Significance, and Enduring Legacy", f"Long-term cultural impact, preservation, and contemporary resonance of {clean_topic}.", detail_level="standard"),
+        ]
+        return planned_sections, visual_elements
+
+    # 6d. Physical, Chemical, Quantum, and Material Sciences
+    if any(w in clean_topic.lower() for w in ("quantum", "physics", "chemical", "chemistry", "nanotech", "solar cell", "material", "semiconductor", "thermodynamic")):
+        visual_elements = ["system_architecture_diagram", "evaluation_matrix"]
+        planned_sections = [
+            PlannedSection("sec_1", f"Theoretical Foundations and Physical Principles of {clean_topic}", f"Fundamental physics, governing laws, and theoretical baselines for {clean_topic}.", detail_level="standard"),
+            PlannedSection("sec_2", f"Mechanisms of Action and Phenomenological Dynamics", f"Core mathematical/physical models, state evolutions, and interactions.", detail_level="deep", visual_element="system_architecture_diagram"),
+            PlannedSection("sec_3", f"Experimental Methodologies and Experimental Implementations", f"Apparatus design, measurement protocols, and fabrication/synthesis techniques.", detail_level="deep", representation="procedural_steps"),
+            PlannedSection("sec_4", f"Empirical Benchmarks, Efficiency Limits, and Error Thresholds", f"Quantitative performance metrics, experimental validation, and loss/error thresholds.", detail_level="deep", visual_element="evaluation_matrix"),
+            PlannedSection("sec_5", f"Technological Applications, Challenges, and Future Trajectories", f"Practical scalability, integration constraints, and forward research directions.", detail_level="standard"),
+        ]
+        return planned_sections, visual_elements
+
+    # 6e. Universal Domain Fallback (Scholarly, Domain-Neutral, Clean)
+    visual_elements = ["comparative_evaluation", "evaluation_matrix"]
     planned_sections = [
-        PlannedSection("sec_1", "Executive Summary", f"Executive synthesis of {clean_topic}.", detail_level="standard"),
-        PlannedSection("sec_2", "Problem Formulation and System Scope", f"Operational background, problem statement, and goals for {clean_topic}.", detail_level="standard"),
-        PlannedSection("sec_3", "Technical Architecture and Core Components", "Component decomposition, interfaces, and architectural patterns.", detail_level="deep", visual_element="system_architecture_diagram"),
-        PlannedSection("sec_4", "Implementation Methodology and Workflows", "Core algorithms, data flow, and procedural execution.", representation="procedural_steps", detail_level="deep"),
-        PlannedSection("sec_5", "Verification, Benchmarking and Quality Assurance", "Validation protocols, testing strategies, and performance criteria.", representation="procedural_steps", detail_level="deep", visual_element="evaluation_matrix"),
-        PlannedSection("sec_6", "Operational Constraints and Strategic Recommendations", "Failure modes, edge cases, scalability bottlenecks, and mitigations.", detail_level="standard"),
-        PlannedSection("sec_7", "Conclusion", "Final architectural summary and strategic roadmap.", detail_level="standard"),
+        PlannedSection("sec_1", f"Foundations and Overview of {clean_topic}", f"Core scope, foundational concepts, and operational context of {clean_topic}.", detail_level="standard"),
+        PlannedSection("sec_2", f"Theoretical Frameworks and Governing Principles", f"Fundamental principles, conceptual models, and structural baselines.", detail_level="deep"),
+        PlannedSection("sec_3", f"Systematic Methodologies and Practical Applications", f"Implementation approaches, typologies, and comparative workflows.", detail_level="deep", visual_element="comparative_evaluation"),
+        PlannedSection("sec_4", f"Empirical Evaluation and Critical Analysis", f"Performance metrics, experimental or observational evidence, and comparative trade-offs.", detail_level="deep", visual_element="evaluation_matrix"),
+        PlannedSection("sec_5", f"Strategic Challenges, Future Trajectories, and Synthesis", f"Forward roadmap, boundary conditions, and concluding synthesis for {clean_topic}.", detail_level="standard"),
     ]
     return planned_sections, visual_elements
 

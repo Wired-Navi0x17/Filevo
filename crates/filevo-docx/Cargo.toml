@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+filevo-spec = { path = "../filevo-spec" }
 quick-xml = "0.37"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+flate2 = "1.0"
+crc32fast = "1.4"
 thiserror = "2.0"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+filevo-decision = { path = "../filevo-decision" }
 tempfile = "3.17"

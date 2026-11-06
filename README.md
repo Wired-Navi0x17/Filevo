@@ -41,7 +41,7 @@ report
 Generate reports directly from CLI arguments or interactively in chat:
 
 ```bash
-# Standard report (DOCX only, default Times New Roman)
+# Standard report (network-free by default; grounds from local corpus)
 report create "Technical Report on Microservices Architecture"
 
 # Watch live document construction in the WordCraft desktop GUI
@@ -50,11 +50,25 @@ report create --live "Autonomous Robotics Sensor Fusion"
 # Generate an exact multi-page monograph (e.g. 250 pages)
 report create "250-page monograph on wild plants"
 
+# Opt-in network ingestion prior to creation
+report create --auto-ingest "Technical report on solid-state batteries"
+
 # Opt-in PDF export alongside DOCX
 report create --pdf "Quarterly Financial Analysis"
 ```
 
-### 3. Ingest Documents & Train Policy
+### 3. Ingest Sources into Local Corpus (Ingest First, Cite Later)
+`/create` **never fetches from the network by default**. Populate the local SQLite + FTS5 corpus with authoritative sources first, and Filevo will retrieve matching chunks per section:
+
+```bash
+# Ingest Wikipedia articles or topics by name
+report ingest "Plant Root Flower"
+
+# Ingest specific URLs (respects robots.txt, stores licence and SHA-256)
+report ingest https://en.wikipedia.org/wiki/Photosynthesis https://arxiv.org/abs/2301.00001
+```
+
+### 4. Ingest Documents & Train Policy
 Filevo uses a unified 3-in-1 pipeline (Ingestion -> Dataset Compilation -> RLCD Policy Gradient Adaptation):
 
 ```bash
@@ -68,7 +82,7 @@ report train /path/to/reference_documents/
 report-train 10
 ```
 
-### 4. Provide Feedback & Calibrate Policy
+### 5. Provide Feedback & Calibrate Policy
 Steer the RLCD policy weights based on generated document quality:
 ```bash
 report feedback +1.0   # Reward structural alignment
@@ -81,14 +95,15 @@ report feedback -0.5   # Penalize formatting or outline drift
 
 | Command | Natural Language Equivalent | Description |
 |---|---|---|
-| `/create <topic> [--live] [--pdf]` | `"create a docx on <topic>"` | Synthesizes a calibrated document. Add `--live` for GUI mode, `--pdf` for PDF export |
+| `/create <topic> [--live] [--pdf] [--auto-ingest]` | `"create a docx on <topic>"` | Synthesizes a calibrated document. Network-free by default. Add `--auto-ingest` to fetch sources first |
+| `/ingest <url\|topic> ...` | `"ingest <topic>"`, `"fetch <url>"` | Fetches and indexes web pages or Wikipedia topics into the local SQLite/FTS5 corpus |
 | `/train [@file\|dir\|live N]` | `"train on @doc.docx"`, `"train live 10"` | Ingests `.docx` files and updates the RLCD policy gradients |
 | `/settings mode [desktop\|headless]` | `"switch mode to desktop"` | Toggles WordCraft visible desktop application or headless server |
 | `/settings engine [wordcraft\|native]` | `"switch engine to native"` | Sets primary composition engine (WordCraft MCP or pure OpenXML) |
 | `/settings auto_open [on\|off]` | `"enable auto open"` | Toggles opening documents in WordCraft upon creation |
 | `/analyze <path>` | `"analyze <path>"`, `"inspect <path>"` | Inspects document structure, outline, or codebase AST |
 | `/feedback <score>` | `"feedback +1.0"`, `"rate -0.5"` | Records human feedback to tune policy weights |
-| `/status` | `"status"`, `"system status"` | Reports indexed document counts, RLCD metrics, and engine status |
+| `/status` | `"status"`, `"system status"` | Reports indexed document counts, corpus sources, RLCD metrics, and engine status |
 | `/status wordcraft` | `"wordcraft status"` | Displays WordCraft MCP server connection and process state |
 | `/model` | `"model"`, `"show weights"` | Displays RLCD policy probabilities and typography configuration |
 | `/clear` | `"clear"`, `"cls"` | Clears the terminal screen |
@@ -109,6 +124,9 @@ Filevo connects to ArtCraft's WordCraft engine via MCP (`wordcraft-cli mcp`):
 3. **Pure OpenXML Fallback**:
    - If WordCraft is unavailable or disabled via `/settings engine native`, Filevo falls back to its built-in native OpenXML engine.
 
+> **Note on Table of Contents (TOC) Page Numbers**:
+> WordCraft renders TOC field entries using standard OpenXML tab stops (`<w:tab/>` with right alignment and dot leaders `<w:leader="dot"/>`). In layout-aware viewers (WordCraft, Word, LibreOffice), page numbers align strictly to the right margin with dot leader trails. Naive XML text extractors that read only `<w:t>` elements without evaluating `<w:tab/>` tags will see heading text and page numbers adjacent in raw text dumps.
+
 ---
 
 ## Anti-Slop Document Policy
@@ -120,6 +138,13 @@ Every generated document adheres to strict editorial and formatting rules:
 - **Substantive Depth**: Guarantees technical depth, hardware specifications, taxonomic classifications, and domain metrics without filler.
 - **Calibrated Page Budgeting**: Automatically calculates target section lengths and suppresses unrequested tables of contents on large volumes to deliver exact requested page counts.
 - **Typography Source of Truth**: Standardized on Times New Roman (Display and Body) with high-contrast monochrome and crisp accent palettes.
+
+### Active RLCD Policy Gates
+RLCD balances structural corpus priors against policy gradients across 5 canonical archetypes (`Technical Report`, `Executive Summary`, `Academic Monograph`, `Project Proposal`, `Formal Letter`). Active boolean gates are strictly aligned with executable AST block generation:
+- `include_tables`: Validated markdown table extraction (requiring $\ge 2$ rows and aligned columns) rendered into `TableBlock`.
+- `include_callouts`: Executive BLUF summaries, takeaways, and signatures rendered into `CalloutBlock`.
+
+*(Note: Unused legacy feature flags `include_formulas`, `include_diagrams`, and `include_benchmarks` were excised because they lacked backing AST block representations and downstream WordCraft/OpenXML rendering handlers.)*
 
 ---
 
@@ -160,6 +185,8 @@ Every generated document adheres to strict editorial and formatting rules:
 Configuration and persistent state are stored in standard user directories:
 - `~/.config/filevo/wordcraft.toml`: WordCraft MCP and Anti-Slop typography settings.
 - `~/.filevo/config.json`: Filevo preferences (active engine, mode, auto-open).
+- `~/.filevo/corpus/corpus.db`: SQLite database with FTS5 virtual tables and MiniLM vectors for source chunks.
+- `~/.filevo/corpus/sources.json`: Human-readable JSON manifest of ingested sources, licenses, and hashes.
 - `~/.filevo/knowledge/document_index.json`: Cached document outlines, styles, and SHA-256 signatures.
 - `~/.filevo/policy/rlcd_policy.json`: Calibrated archetype biases and REINFORCE weights.
 - `~/.filevo/output/`: Default target directory for generated `.docx` documents.
@@ -172,6 +199,11 @@ Configuration and persistent state are stored in standard user directories:
 Run the Python verification test suite (all 36 tests pass):
 ```bash
 python3 tests/test_filevo.py
+```
+
+Run the local corpus store and retrieval verification suite (all 27 tests pass):
+```bash
+python3 tests/test_corpus.py
 ```
 
 Run the companion Rust TUI test suite (all 51 tests pass):

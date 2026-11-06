@@ -1,0 +1,37 @@
+id = "classic_serif"
+label = "Classic serif"
+description = "Quiet serif typography with generous leading for long reading: textbooks, study guides, monographs and academic work."
+words_per_page = 430
+
+[fonts]
+display = "Georgia"
+body = "Georgia"
+mono = "Consolas"
+
+[size]
+title = 28
+subtitle = 13
+h1 = 17
+h2 = 13.5
+h3 = 11.5
+body = 11
+caption = 9.5
+table = 9.5
+
+[color]
+text = "1F2328"
+accent = "14363F"
+accent_soft = "2C5A66"
+muted = "5B6B70"
+rule = "14363F"
+rule_soft = "D3DCDE"
+callout_fill = "E8F0EF"
+
+[layout]
+margin_top = 72
+margin_bottom = 72
+margin_side = 80
+line_spacing = 1.4
+space_after = 7
+heading_numbering = true
+toc_levels = 3

@@ -1,0 +1,27 @@
+{
+  "id": "study_guide",
+  "label": "Study guide",
+  "description": "An explanatory study guide that teaches a subject step by step for students: plain definitions, the key formulas explained, worked examples, algorithm steps and common mistakes to avoid. Learn, revise, understand, explain, exam preparation.",
+  "default_words": 3200,
+  "kind_preference": {
+    "definition": 1.0,
+    "intuition": 1.0,
+    "formula": 0.9,
+    "algorithm_step": 0.9,
+    "example": 1.0,
+    "pitfall": 0.9,
+    "comparison": 0.6,
+    "application": 0.5,
+    "history": 0.2
+  },
+  "callout_kinds": [
+    "pitfall"
+  ],
+  "kind_labels": {
+    "pitfall": "Common mistake",
+    "example": "Worked example",
+    "history": "Background"
+  },
+  "references_title": "Sources",
+  "overview_title": "Overview"
+}

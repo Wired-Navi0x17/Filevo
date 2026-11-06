@@ -52,9 +52,6 @@ DEFAULT_FEATURES = [
     "depth_standard",
     "depth_deep",
     # Boolean gates (Noul primitive)
-    "include_formulas",
-    "include_diagrams",
-    "include_benchmarks",
     "include_tables",
     "include_callouts",
     # Volume and chapter structure (Choice / Scale primitives)
@@ -584,7 +581,7 @@ class RLCDDecisionEngine:
                 score += 5.5 if is_large_volume else 4.5
             elif ("letter" in p_lower or "permission" in p_lower or "formal letter" in p_lower or "application" in p_lower or "memo" in p_lower) and arch == "Formal Letter":
                 score += 5.0
-            elif ("report" in p_lower or "technical" in p_lower or "analysis" in p_lower or "study" in p_lower) and arch == "Technical Report":
+            elif ("report" in p_lower or "technical" in p_lower or "analysis" in p_lower or "study" in p_lower or any(w in p_lower for w in ("docx", "document", "guide", "overview"))) and arch == "Technical Report":
                 score += 4.0
             lex_scores.append(score)
 
@@ -592,6 +589,18 @@ class RLCDDecisionEngine:
 
         # Perspective 2: Learned Policy prior
         policy_scores = [self.archetype_biases.get(a, 0.0) + 1.0 for a in ARCHETYPES]
+
+        # Optional corpus signal. The policy has always accepted a
+        # `knowledge_profile`; until now it ignored it. A small, bounded nudge
+        # lets an ingested source set influence genre choice without overriding
+        # the calibration already learned from feedback.
+        if knowledge_profile:
+            hint = knowledge_profile.get("archetype_hint")
+            if hint in ARCHETYPES:
+                policy_scores = [
+                    score + (0.4 if arch == hint else 0.0)
+                    for score, arch in zip(policy_scores, ARCHETYPES)
+                ]
         p_policy: list[float] = self.softmax(policy_scores, temp=self.temperature)  # type: ignore
 
         # Disagreement & Consensus
@@ -605,6 +614,18 @@ class RLCDDecisionEngine:
         winner_idx = max(range(len(ARCHETYPES)), key=lambda i: p_ens[i])
         winner_arch = ARCHETYPES[winner_idx]
         confidence = p_ens[winner_idx]
+
+        # Intent Guard: Never allow Executive Summary to win purely from learned policy bias
+        # if the user prompt does not contain explicit executive keywords.
+        exec_signals = ("executive", "c-suite", "board", "briefing", "exec summary", "commercial use", "business case", "kpi", "roi")
+        if winner_arch == "Executive Summary" and not any(k in p_lower for k in exec_signals):
+            # Fallback to Technical Report or Academic Monograph based on lexical signals
+            if any(w in p_lower for w in ("monograph", "academic", "research", "paper", "history of", "biology", "scientific", "study", "treatise")):
+                winner_arch = "Academic Monograph"
+            else:
+                winner_arch = "Technical Report"
+            winner_idx = ARCHETYPES.index(winner_arch)
+            confidence = p_ens[winner_idx]
 
         # Calibrated Risk Gate
         is_confident = (confidence >= 0.50) and (agreement >= 0.65) and (norm_h <= 0.85)
@@ -1403,9 +1424,6 @@ class RLCDDecisionEngine:
             "rigor_probabilities": {k: round(v, 4) for k, v in rigor_probs.items()},
             "depth_probabilities": {k: round(v, 4) for k, v in depth_probs.items()},
             "gate_probabilities": {
-                "include_formulas": round(self.sigmoid("include_formulas"), 4),
-                "include_diagrams": round(self.sigmoid("include_diagrams"), 4),
-                "include_benchmarks": round(self.sigmoid("include_benchmarks"), 4),
                 "include_tables": round(self.sigmoid("include_tables"), 4),
                 "include_callouts": round(self.sigmoid("include_callouts"), 4),
             },
